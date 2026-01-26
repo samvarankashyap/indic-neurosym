@@ -340,5 +340,5 @@ If you use this work in your research, please cite:
 ## Acknowledgments
 
 - Telugu Wikisource for Dwipada Bhagavatam texts
-- AndhaBharati.com for Ranganatha Ramayanam texts
+- andhrabharati.com for Ranganatha Ramayanam texts
 - Traditional Telugu prosody scholars for Chandassu documentation
