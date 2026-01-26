@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets and config
+config.yaml
+
+# Logs and outputs
+gemini_responses.txt
+*.log
+
+# Claude Code
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
