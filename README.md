@@ -35,21 +35,32 @@ inlp_project/
 │
 ├── crawl_dwipada_bhagavatam.py        # Crawler: Dwipada Bhagavatam from Wikisource
 ├── crawl_ranganatha_ramayanam.py      # Crawler: Ranganatha Ramayanam from AndhaBharati
+├── crawl_srirama_parinayamu.py        # Crawler: Sri Rama Parinayamu from Wikisource
+├── crawl_basava_puranam.py            # Crawler: Basava Puranam from Wikisource
+├── clean_srirama_parinayamu.py        # Cleaner: Remove punctuation from Sri Rama Parinayamu
+├── clean_basava_puranam.py            # Cleaner: Remove punctuation from Basava Puranam
 │
-└── data/
-    ├── dwipada_bhagavatam/            # 206 chapters across 3 kandas
-    │   ├── 01_MadhuraKanda/           # 76 chapters
-    │   ├── 02_KalyanaKanda/           # 88 chapters
-    │   └── 03_JagadabhirakshaKanda/   # 42 chapters
+└── data/                              # 687 files, 60,334 couplets total
+    ├── ranganatha_ramayanam/          # 405 files, 53,457 couplets
+    │   ├── 01_BalaKanda/
+    │   ├── 02_AyodhyaKanda/
+    │   ├── 03_AranyaKanda/
+    │   ├── 04_KishkindhaKanda/
+    │   ├── 05_SundaraKanda/
+    │   ├── 06_YuddhaKanda/
+    │   └── 07_UttaraKanda/
     │
-    └── ranganatha_ramayanam/          # 405 chapters across 7 kandas
-        ├── 01_BalaKanda/
-        ├── 02_AyodhyaKanda/
-        ├── 03_AranyaKanda/
-        ├── 04_KishkindhaKanda/
-        ├── 05_SundaraKanda/
-        ├── 06_YuddhaKanda/
-        └── 07_UttaraKanda/
+    ├── dwipada_bhagavatam/            # 207 files, 3,624 couplets
+    │   ├── 01_MadhuraKanda/
+    │   ├── 02_KalyanaKanda/
+    │   └── 03_JagadabhirakshaKanda/
+    │
+    ├── basava_puranam/                # 47 files, 2,455 couplets
+    │   ├── 001_ప్రథమాశ్వాసము/
+    │   ├── 002_ద్వితీయాశ్వాసము/
+    │   └── 003_తృతీయాశ్వాసము/
+    │
+    └── srirama_parinayamu/            # 28 files, 798 couplets
 ```
 
 ---
@@ -163,23 +174,35 @@ print(categories)  # {'హల్లు', 'ఋకారం', ...}
 
 ### 3. Data Crawlers
 
-#### Crawl Dwipada Bhagavatam
-```bash
-python crawl_dwipada_bhagavatam.py
-```
-
-Downloads 206 chapters from Telugu Wikisource:
-- Source: `te.wikisource.org/wiki/ద్విపదభాగవతము/`
-- Output: `data/dwipada_bhagavatam/`
-
 #### Crawl Ranganatha Ramayanam
 ```bash
 python crawl_ranganatha_ramayanam.py
 ```
+- **Source**: `andhrabharati.com/itihAsamulu/RanganathaRamayanamu/`
+- **Output**: `data/ranganatha_ramayanam/` (405 chapters, 7 kandas)
 
-Downloads 405 chapters from AndhaBharati:
-- Source: `andhrabharati.com/itihAsamulu/RanganathaRamayanamu/`
-- Output: `data/ranganatha_ramayanam/`
+#### Crawl Dwipada Bhagavatam
+```bash
+python crawl_dwipada_bhagavatam.py
+```
+- **Source**: `te.wikisource.org/wiki/ద్విపదభాగవతము/`
+- **Output**: `data/dwipada_bhagavatam/` (207 chapters, 3 kandas)
+
+#### Crawl Basava Puranam
+```bash
+python crawl_basava_puranam.py
+python clean_basava_puranam.py  # Optional: remove punctuation
+```
+- **Source**: `te.wikisource.org/wiki/బసవపురాణము/`
+- **Output**: `data/basava_puranam/` (47 sections, 3 ఆశ్వాసములు)
+
+#### Crawl Sri Rama Parinayamu
+```bash
+python crawl_srirama_parinayamu.py
+python clean_srirama_parinayamu.py  # Optional: remove punctuation
+```
+- **Source**: `te.wikisource.org/wiki/శ్రీరమాపరిణయము/`
+- **Output**: `data/srirama_parinayamu/` (28 chapters)
 
 ---
 
@@ -240,21 +263,78 @@ The base consonant of the 2nd syllable in Line 1 must match the base consonant o
 
 ## Datasets
 
-### Dwipada Bhagavatam
-- **Source**: Telugu Wikisource
-- **Chapters**: 206 across 3 kandas
-- **Format**: Plain text with metadata headers
+### Telugu Poetry Corpus Summary
 
-### Ranganatha Ramayanam
+| Dataset | Source | Files | Couplets |
+|---------|--------|------:|--------:|
+| **రంగనాథ రామాయణము** | AndhaBharati.com | 405 | 53,457 |
+| **ద్విపద భాగవతము** | te.wikisource.org | 207 | 3,624 |
+| **బసవపురాణము** | te.wikisource.org | 47 | 2,455 |
+| **శ్రీరమాపరిణయము** | te.wikisource.org | 28 | 798 |
+| **TOTAL** | | **687** | **60,334** |
+
+---
+
+### రంగనాథ రామాయణము (Ranganatha Ramayanam)
 - **Source**: AndhaBharati.com
-- **Chapters**: 405 across 7 kandas
-- **Format**: Plain text with footnotes
+- **Author**: గోన బుద్ధారెడ్డి (Gona Budda Reddy)
+- **Format**: Dwipada (ద్విపద) meter
+
+| Kanda | Files | Couplets |
+|-------|------:|--------:|
+| బాలకాండము | 31 | 5,407 |
+| అయోధ్యాకాండము | 35 | 4,396 |
+| అరణ్యకాండము | 28 | 3,368 |
+| కిష్కింధాకాండము | 25 | 3,021 |
+| సుందరకాండము | 27 | 3,794 |
+| యుద్ధకాండము | 170 | 22,785 |
+| ఉత్తరకాండము | 89 | 10,686 |
+
+### ద్విపద భాగవతము (Dwipada Bhagavatam)
+- **Source**: Telugu Wikisource
+- **Format**: Dwipada (ద్విపద) meter
+
+| Kanda | Files | Couplets |
+|-------|------:|--------:|
+| మధురకాండ | 77 | 2,223 |
+| కల్యాణకాండ | 88 | 934 |
+| జగదభిరక్షకాండ | 42 | 467 |
+
+### బసవపురాణము (Basava Puranam)
+- **Source**: Telugu Wikisource
+- **Author**: పాల్కురికి సోమనాథుడు (Palkuriki Somanatha)
+- **Format**: Dwipada (ద్విపద) meter
+
+| Ashvasam | Files | Couplets |
+|----------|------:|--------:|
+| ప్రథమాశ్వాసము | 11 | 634 |
+| ద్వితీయాశ్వాసము | 22 | 663 |
+| తృతీయాశ్వాసము | 14 | 1,158 |
+
+### శ్రీరమాపరిణయము (Sri Rama Parinayamu)
+- **Source**: Telugu Wikisource
+- **Author**: తరిగొండ వెంగమాంబ (Tarigonda Vengamamba)
+- **Chapters**: 28
+- **Couplets**: 798
+- **Format**: Dwipada (ద్విపద) meter
+
+---
 
 ### File Format
 ```
-# కాండము: మధురాకాండము
+# గ్రంథము: బసవపురాణము
+# ఆశ్వాసము: ప్రథమాశ్వాసము
+# విభాగము: 001
+# శీర్షిక: శ్రీరస్తు
+
+[Telugu verse content]
+```
+
+For Ranganatha Ramayanam (includes footnotes):
+```
+# కాండము: బాలకాండము
 # అధ్యాయము: 001
-# శీర్షిక: ద్విపదభాగవతము
+# శీర్షిక: Chapter Title
 
 [Telugu verse content]
 
@@ -339,6 +419,9 @@ If you use this work in your research, please cite:
 
 ## Acknowledgments
 
-- Telugu Wikisource for Dwipada Bhagavatam texts
-- andhrabharati.com for Ranganatha Ramayanam texts
+- **Telugu Wikisource** (te.wikisource.org) for:
+  - ద్విపద భాగవతము (Dwipada Bhagavatam)
+  - బసవపురాణము (Basava Puranam) by పాల్కురికి సోమనాథుడు
+  - శ్రీరమాపరిణయము (Sri Rama Parinayamu) by తరిగొండ వెంగమాంబ
+- **AndhaBharati.com** for రంగనాథ రామాయణము (Ranganatha Ramayanam)
 - Traditional Telugu prosody scholars for Chandassu documentation
