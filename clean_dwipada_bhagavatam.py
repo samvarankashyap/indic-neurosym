@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clean the Basava Puranam dataset by removing punctuation marks.
+Clean the Dwipada Bhagavatam dataset by removing punctuation marks.
 
 Removes:
 - All kinds of quotes (single, double, Telugu quotes)
@@ -8,18 +8,17 @@ Removes:
 - Telugu arasunna (ఁ - chandrabindu)
 - Question marks
 - Commas
+- Parentheses (keeps content inside)
+- Trailing numbers from verse lines (not metadata)
 - Other punctuation
 
-Splits:
-- Lines with hyphens (-) into separate dwipada verses
-
-Processes files recursively in nested ఆశ్వాసము folders.
+Processes files recursively in nested కాండము folders.
 """
 
 import re
 from pathlib import Path
 
-DATA_DIR = Path(__file__).parent / "data" / "basava_puranam"
+DATA_DIR = Path(__file__).parent / "data" / "dwipada_bhagavatam"
 
 # Characters to remove (using Unicode escapes for clarity)
 CHARS_TO_REMOVE = [
@@ -47,7 +46,7 @@ CHARS_TO_REMOVE = [
     ';',            # Semicolon
     ':',            # Colon (but keep in metadata lines)
     '.',            # Period
-    '(',  ')',      # Parentheses
+    '(',  ')',      # Parentheses (remove chars, keep content)
     '[', ']',       # Brackets
 ]
 
@@ -68,10 +67,14 @@ def clean_line(line: str, is_metadata: bool = False) -> str:
     for char in chars:
         line = line.replace(char, '')
 
+    # Remove trailing numbers from verse lines only (not metadata)
+    if not is_metadata:
+        line = re.sub(r'[0-9]+\s*$', '', line)
+
     # Clean up multiple spaces that may result from removals
     line = re.sub(r'  +', ' ', line)
 
-    return line
+    return line.strip()
 
 
 def clean_file(filepath: Path) -> tuple[int, int]:
@@ -92,16 +95,7 @@ def clean_file(filepath: Path) -> tuple[int, int]:
         # Check if it's a metadata line
         is_metadata = line.startswith('#')
         cleaned = clean_line(line, is_metadata)
-
-        # Split lines with hyphen into separate dwipada verses
-        if '-' in cleaned and not is_metadata:
-            parts = cleaned.split('-')
-            for part in parts:
-                stripped = part.strip()
-                if stripped:  # Only add non-empty lines
-                    cleaned_lines.append(stripped)
-        else:
-            cleaned_lines.append(cleaned.strip())
+        cleaned_lines.append(cleaned)
 
     cleaned_content = '\n'.join(cleaned_lines)
     chars_removed = original_len - len(cleaned_content)
@@ -115,7 +109,7 @@ def clean_file(filepath: Path) -> tuple[int, int]:
 def main():
     """Clean all files in the dataset (recursively for nested folders)."""
     print("=" * 60)
-    print("Cleaning బసవపురాణము (Basava Puranam) Dataset")
+    print("Cleaning ద్విపద భాగవతము (Dwipada Bhagavatam) Dataset")
     print("=" * 60)
     print(f"Directory: {DATA_DIR}")
     print(f"Characters to remove: {len(CHARS_TO_REMOVE)} types")
