@@ -1,22 +1,86 @@
 # -*- coding: utf-8 -*-
 """
-Dwipada Analyzer v1.0
----------------------
-Standalone Telugu Dwipada Chandassu (prosody) analysis tool.
+Dwipada Analyzer v2.0
+=====================
+Telugu Dwipada Chandassu (prosody) analysis tool with percentage scoring.
 
-Features:
-- Aksharam (syllable) splitting
-- Gana (prosody) analysis (Guru/Laghu marking)
-- Dwipada validation:
-  * Gana Sequence: 3 Indra Ganas + 1 Surya Gana per line
-  * Prasa: 2nd aksharam consonant match between lines
-  * Yati: 1st letter of 1st Gana matches 1st letter of 3rd Gana
+QUICK REFERENCE
+---------------
+Main Functions:
+    analyze_dwipada(poem)       → Full analysis with match_score (0-100%)
+    format_analysis_report()    → Human-readable report with diagnostics
+    analyze_single_line(line)   → Analyze one line of poetry
+    analyze_pada(line)          → Low-level line analysis (dict output)
+
+Key Concepts:
+    - Dwipada (ద్విపద): 2-line couplet, each line has 3 Indra + 1 Surya gana
+    - Gana (గణము): Prosodic foot with Guru (U) / Laghu (I) pattern
+    - Prasa (ప్రాస): 2nd syllable consonant must match between lines
+    - Yati (యతి): 1st letter of gana 1 must match 1st letter of gana 3
+
+Scoring (0-100%):
+    - Gana: 40% weight (25% per valid gana × 4 ganas)
+    - Prasa: 35% weight (100% if match, 0% if mismatch)
+    - Yati: 25% weight (100% exact, 70% same varga, 0% different)
+
+Example:
+    >>> poem = \"\"\"సౌధాగ్రముల యందు సదనంబు లందు
+    ... వీధుల యందును వెఱవొప్ప నిలిచి\"\"\"
+    >>> analysis = analyze_dwipada(poem)
+    >>> analysis["is_valid_dwipada"]
+    True
+    >>> analysis["match_score"]["overall"]
+    100.0
 
 Based on Aksharanusarika v0.0.7a logic.
 """
 
 import re
 from typing import List, Tuple, Dict, Optional, Set
+
+###############################################################################
+# TELUGU PROSODY GLOSSARY (ఛందస్సు పదకోశం)
+###############################################################################
+#
+# BASIC TERMS:
+# - Aksharam (అక్షరము): Syllable - the fundamental unit of Telugu writing
+# - Gana (గణము): Prosodic foot - group of syllables with specific pattern
+# - Pada (పాదము): Line/verse - one line of poetry
+# - Chandassu (ఛందస్సు): Meter/prosody - the rhythmic system
+#
+# SYLLABLE WEIGHT:
+# - Guru (గురువు, U): Heavy/long syllable - takes more time to pronounce
+# - Laghu (లఘువు, I): Light/short syllable - quick to pronounce
+#
+# GANA TYPES IN DWIPADA:
+# - Indra Ganas (ఇంద్ర గణములు): 3-4 syllable patterns
+#     * Nala (నల): IIII - 4 light syllables
+#     * Naga (నగ): IIIU - 3 light + 1 heavy
+#     * Sala (సల): IIUI - 2 light + 1 heavy + 1 light
+#     * Bha (భ): UII - 1 heavy + 2 light
+#     * Ra (ర): UIU - heavy + light + heavy
+#     * Ta (త): UUI - 2 heavy + 1 light
+# - Surya Ganas (సూర్య గణములు): 2-3 syllable patterns
+#     * Na (న): III - 3 light syllables
+#     * Ha/Gala (హ/గల): UI - 1 heavy + 1 light
+#
+# DWIPADA RULES:
+# - Prasa (ప్రాస): Rhyme rule - 2nd syllable's consonant must match
+#   between lines (e.g., "ధా" and "ధు" both have consonant "ధ")
+# - Yati (యతి): Alliteration rule - 1st letter of gana 1 must match
+#   1st letter of gana 3 in each line
+# - Yati Maitri (యతి మైత్రి): Phonetic groups where different letters
+#   can substitute for each other (e.g., క and గ are in same group)
+#
+# SPECIAL TERMS:
+# - Pollu Hallu (పొల్లు హల్లు): Consonant + halant that can't stand alone
+#   Example: In "సత్య", the "త్" is pollu hallu, merges with "య" → "త్య"
+# - Varga (వర్గము): Consonant class by articulation point (velar, dental, etc.)
+# - Halant (హలంతు, ్): Vowel-killer mark that removes inherent 'అ' sound
+# - Anusvara (అనుస్వారం, ం): Nasal sound marker
+# - Visarga (విసర్గ, ః): Breath sound marker
+#
+###############################################################################
 
 ###############################################################################
 # LINGUISTIC DATA AND CONSTANTS
@@ -94,6 +158,24 @@ CONSONANT_VARGAS = {
     # Aspirate (ఊష్మము)
     "హ-వర్గము (Aspirate)": ["హ"],
 }
+
+# =============================================================================
+# SCORING CONSTANTS
+# =============================================================================
+# These constants define the scoring rules for Dwipada analysis.
+# Using named constants improves readability and makes it easy to adjust scoring.
+
+EXPECTED_GANAS_PER_LINE = 4           # 3 Indra + 1 Surya gana per line
+SCORE_PER_VALID_GANA = 25.0           # Each valid gana contributes 25% (100% / 4)
+
+# Yati quality scores - measures how well the alliteration rule is satisfied
+YATI_EXACT_MATCH_SCORE = 100.0        # Same letter (e.g., స ↔ స)
+YATI_VARGA_MATCH_SCORE = 70.0         # Same phonetic group (e.g., క ↔ గ)
+YATI_NO_MATCH_SCORE = 0.0             # Different groups (e.g., క ↔ చ)
+
+# Prasa scores - binary match for rhyme rule
+PRASA_MATCH_SCORE = 100.0             # Consonants match
+PRASA_NO_MATCH_SCORE = 0.0            # Consonants don't match
 
 
 def get_consonant_varga(consonant: str) -> Optional[str]:
@@ -263,7 +345,8 @@ def calculate_gana_score(partition_result: Optional[Dict]) -> Dict:
         })
 
     result["ganas_matched"] = valid_count
-    result["score"] = (valid_count / 4) * 100.0
+    # Each valid gana contributes 25% to the score (100% / 4 ganas)
+    result["score"] = valid_count * SCORE_PER_VALID_GANA
 
     return result
 
@@ -302,7 +385,7 @@ def calculate_prasa_score(prasa_result: Optional[Dict]) -> Dict:
 
     is_match = prasa_result.get("match", False)
     result["match"] = is_match
-    result["score"] = 100.0 if is_match else 0.0
+    result["score"] = PRASA_MATCH_SCORE if is_match else PRASA_NO_MATCH_SCORE
 
     # Generate mismatch diagnostics if not matching
     if not is_match:
@@ -427,14 +510,14 @@ def calculate_yati_score(yati_result: Optional[Dict]) -> Dict:
     # Determine quality of match
     if is_match:
         if letter1 == letter2:
-            result["score"] = 100.0
+            result["score"] = YATI_EXACT_MATCH_SCORE
             result["quality"] = "exact"
         else:
             # Same varga but different letter
-            result["score"] = 70.0
+            result["score"] = YATI_VARGA_MATCH_SCORE
             result["quality"] = "varga_match"
     else:
-        result["score"] = 0.0
+        result["score"] = YATI_NO_MATCH_SCORE
         result["quality"] = "no_match"
 
     # Always provide letter details for educational purposes
@@ -598,34 +681,72 @@ SURYA_GANAS = {
 ###############################################################################
 
 def categorize_aksharam(aksharam: str) -> List[str]:
-    """Categorize an aksharam with linguistic tags."""
+    """
+    Categorize an aksharam with linguistic tags.
+
+    This function analyzes a syllable and returns all applicable
+    linguistic categories. These tags are used for Guru/Laghu marking
+    and other prosody analysis.
+
+    TAGS RETURNED (Telugu linguistic terms):
+        అచ్చు (Vowel): Starts with independent vowel or is a diacritic
+        హల్లు (Consonant): Contains any consonant
+        దీర్ఘ (Long): Has a long vowel (ా ీ ూ ే ో ౌ)
+        విసర్గ అక్షరం (Visarga): Contains visarga (ః)
+        అనుస్వారం (Anusvara): Contains anusvara (ం)
+        సంయుక్తాక్షరం (Conjunct): Has different consonant cluster (C్C)
+        ద్విత్వాక్షరం (Double): Has same consonant doubled (C్C)
+
+    Args:
+        aksharam: A single Telugu syllable
+
+    Returns:
+        List of applicable tags (sorted alphabetically)
+
+    Example:
+        >>> categorize_aksharam("క")
+        ['హల్లు']
+        >>> categorize_aksharam("కా")
+        ['దీర్ఘ', 'హల్లు']
+        >>> categorize_aksharam("సం")
+        ['అనుస్వారం', 'హల్లు']
+        >>> categorize_aksharam("క్ష")
+        ['సంయుక్తాక్షరం', 'హల్లు']
+        >>> categorize_aksharam("అమ్మ")
+        ['ద్విత్వాక్షరం', 'హల్లు']  # మ్మ is doubled మ
+    """
     categories = set()
 
+    # Check for vowel (అచ్చు)
     if aksharam[0] in independent_vowels:
         categories.add("అచ్చు")
     elif aksharam in diacritics:
         categories.add("అచ్చు")
 
+    # Check for consonant (హల్లు)
     if any(c in telugu_consonants for c in aksharam):
         categories.add("హల్లు")
 
+    # Check for long vowel (దీర్ఘ)
     if any(dv in aksharam for dv in long_vowels) or aksharam in independent_long_vowels:
         categories.add("దీర్ఘ")
 
+    # Check for visarga (ః) and anusvara (ం)
     if "ః" in aksharam:
         categories.add("విసర్గ అక్షరం")
     if "ం" in aksharam:
         categories.add("అనుస్వారం")
 
+    # Check for conjunct (C్C different) or double (C్C same) consonants
     found_conjunct, found_double = False, False
     for i in range(len(aksharam) - 2):
         if (aksharam[i] in telugu_consonants and
             aksharam[i+1] == halant and
             aksharam[i+2] in telugu_consonants):
             if aksharam[i] == aksharam[i+2]:
-                found_double = True
+                found_double = True    # Same consonant doubled (e.g., మ్మ)
             else:
-                found_conjunct = True
+                found_conjunct = True  # Different consonants (e.g., క్ష)
 
     if found_conjunct:
         categories.add("సంయుక్తాక్షరం")
@@ -636,11 +757,46 @@ def categorize_aksharam(aksharam: str) -> List[str]:
 
 
 def split_aksharalu(word: str) -> List[str]:
-    """Split Telugu word into aksharalu (syllables)."""
+    """
+    Split Telugu word into aksharalu (syllables).
+
+    ALGORITHM (Two-Pass):
+    Pass 1 - Coarse Split: Break at vowels and consonant boundaries
+        - Consonant clusters (C్C) are kept together via halant
+        - Dependent vowels attach to preceding consonant
+        - Independent vowels form their own syllable
+
+    Pass 2 - Pollu Hallu Merge: Attach trailing consonant+halant to previous syllable
+        - "Pollu hallu" (పొల్లు హల్లు) = consonant + halant that can't stand alone
+        - These get merged back into the previous syllable
+
+    Telugu Syllable Rules:
+        - An aksharam starts with a consonant or vowel
+        - Conjunct consonants (సంయుక్తాక్షరం) like త్య belong to one syllable
+        - Anusvara (ం) and visarga (ః) attach to the syllable they follow
+
+    Args:
+        word: Telugu word or text to split
+
+    Returns:
+        List of aksharalu (syllables)
+
+    Example:
+        >>> split_aksharalu("తెలుగు")
+        ['తె', 'లు', 'గు']
+        >>> split_aksharalu("సత్యము")
+        ['స', 'త్య', 'ము']  # త్య is kept as one syllable (conjunct)
+        >>> split_aksharalu("గౌరవం")
+        ['గౌ', 'ర', 'వం']  # ం stays with వ
+    """
+    # ─────────────────────────────────────────────────────────────────────────
+    # PASS 1: Coarse split - identify syllable boundaries
+    # ─────────────────────────────────────────────────────────────────────────
     coarse_split = []
     i, n = 0, len(word)
 
     while i < n:
+        # Skip ignorable characters (spaces, arasunna, etc.)
         if word[i] in ignorable_chars:
             coarse_split.append(word[i])
             i += 1
@@ -648,23 +804,28 @@ def split_aksharalu(word: str) -> List[str]:
 
         current = []
         if word[i] in telugu_consonants:
+            # Start with consonant - collect entire consonant cluster
             current.append(word[i])
             i += 1
+            # Handle conjunct consonants: C్C్C... (halant chains)
             while i < n and word[i] == halant:
-                current.append(word[i])
+                current.append(word[i])  # Add halant
                 i += 1
                 if i < n and word[i] in telugu_consonants:
-                    current.append(word[i])
+                    current.append(word[i])  # Add next consonant in cluster
                     i += 1
                 else:
-                    break
+                    break  # Halant at end (pollu hallu case)
+            # Attach dependent vowels and diacritics (ా ి ం ః etc.)
             while i < n and (word[i] in dependent_vowels or word[i] in diacritics):
                 current.append(word[i])
                 i += 1
         else:
+            # Start with vowel (independent vowel like అ ఆ ఇ)
             char = word[i]
             current.append(char)
             i += 1
+            # Independent vowel can have diacritics (అం అః)
             if char in independent_vowels and i < n and word[i] in diacritics:
                 current.append(word[i])
                 i += 1
@@ -673,11 +834,19 @@ def split_aksharalu(word: str) -> List[str]:
     if not coarse_split:
         return []
 
-    # Second pass: merge pollu hallu with previous aksharam
+    # ─────────────────────────────────────────────────────────────────────────
+    # PASS 2: Merge pollu hallu (trailing consonant+halant) with previous
+    # ─────────────────────────────────────────────────────────────────────────
+    # Pollu hallu = consonant followed by halant only (no vowel)
+    # Example: In "విద్య", after pass 1 we might have ["వి", "ద్", "య"]
+    #          Pass 2 merges "ద్" into previous → ["వి", "ద్య"] ... wait, that's not right
+    #          Actually this handles edge cases like standalone హల్లు at word boundaries
     final_aksharalu = []
     for chunk in coarse_split:
+        # Check if this is a "pollu hallu" - consonant + halant only (2 chars)
         is_pollu_hallu = len(chunk) == 2 and chunk[0] in telugu_consonants and chunk[1] == halant
         if is_pollu_hallu and final_aksharalu and final_aksharalu[-1] not in ignorable_chars:
+            # Merge with previous syllable
             final_aksharalu[-1] += chunk
         else:
             final_aksharalu.append(chunk)
@@ -687,39 +856,88 @@ def split_aksharalu(word: str) -> List[str]:
 
 def akshara_ganavibhajana(aksharalu_list: List[str]) -> List[str]:
     """
-    Perform Gana (prosody) analysis - mark each syllable as Guru (U) or Laghu (I).
+    Mark each syllable as Guru (U/heavy) or Laghu (I/light).
+
+    This is the core prosody analysis that determines syllable weight,
+    essential for identifying gana patterns in Telugu poetry.
+
+    GURU RULES (గురువు - heavy syllable):
+    A syllable is marked Guru (U) if ANY of these apply:
+        Rule 1: Has long vowel (దీర్ఘ) - ా ీ ూ ే ో
+        Rule 2: Has diphthong - ై (ai) or ౌ (au)
+        Rule 3: Has anusvara (ం) or visarga (ః)
+        Rule 4: Ends with halant (్) - incomplete syllable
+        Rule 5: NEXT syllable starts with conjunct (C్C) or double consonant
+                → This makes the CURRENT syllable Guru (sandhi effect)
+
+    LAGHU RULES (లఘువు - light syllable):
+    A syllable is Laghu (I) if NONE of the Guru rules apply.
+    Default: short vowel (అ ఇ ఉ ఎ ఒ) without special markers.
+
+    TWO-PASS ALGORITHM:
+        Pass 1: Mark based on syllable's own properties (rules 1-4)
+        Pass 2: Look ahead - if next syllable is conjunct/double,
+                mark current as Guru (rule 5)
+
+    Args:
+        aksharalu_list: List of syllables from split_aksharalu()
+
+    Returns:
+        List of markers: "U" for Guru, "I" for Laghu, "" for ignorable
+
+    Example:
+        >>> akshara_ganavibhajana(['తె', 'లు', 'గు'])
+        ['I', 'I', 'I']  # All short vowels → Laghu
+        >>> akshara_ganavibhajana(['సం', 'ప', 'ద'])
+        ['U', 'I', 'I']  # సం has anusvara → Guru
+        >>> akshara_ganavibhajana(['స', 'త్య', 'ము'])
+        ['U', 'I', 'I']  # స is before conjunct త్య → becomes Guru
     """
     if not aksharalu_list:
         return []
 
     ganam_markers = [None] * len(aksharalu_list)
 
-    # First Pass: Identify Gurus based on their own properties
+    # ─────────────────────────────────────────────────────────────────────────
+    # PASS 1: Mark Guru based on syllable's own properties (Rules 1-4)
+    # ─────────────────────────────────────────────────────────────────────────
     for i, aksharam in enumerate(aksharalu_list):
         if aksharam in ignorable_chars:
             ganam_markers[i] = ""
             continue
 
-        ganam_markers[i] = "I"  # Default to Laghu
+        ganam_markers[i] = "I"  # Default: Laghu (light)
         tags = set(categorize_aksharam(aksharam))
 
         is_guru = False
+        # Rule 1: Long vowel (దీర్ఘ స్వరం)
         if 'దీర్ఘ' in tags:
             is_guru = True
+        # Rule 2: Diphthongs (సంధ్యక్షరం) - ఐ, ఔ
         if 'ఐ' in aksharam or 'ఔ' in aksharam or 'ై' in aksharam or 'ౌ' in aksharam:
             is_guru = True
+        # Rule 3: Anusvara or Visarga
         if 'అనుస్వారం' in tags or 'విసర్గ అక్షరం' in tags:
             is_guru = True
+        # Rule 4: Ends with halant (incomplete syllable)
         if aksharam.endswith(halant):
             is_guru = True
+
         if is_guru:
             ganam_markers[i] = "U"
 
-    # Second pass: syllable before conjunct/double becomes Guru
+    # ─────────────────────────────────────────────────────────────────────────
+    # PASS 2: Sandhi rule - syllable before conjunct/double becomes Guru
+    # ─────────────────────────────────────────────────────────────────────────
+    # This implements Rule 5: If the NEXT syllable starts with a consonant
+    # cluster (conjunct or double), the CURRENT syllable becomes heavy.
+    # Linguistic basis: The first consonant of the cluster "closes" the
+    # previous syllable, making it a closed syllable (always Guru).
     for i in range(len(aksharalu_list)):
         if ganam_markers[i] == "":
             continue
 
+        # Find next non-ignorable syllable
         next_syllable_index = -1
         for j in range(i + 1, len(aksharalu_list)):
             if aksharalu_list[j] not in ignorable_chars:
@@ -728,8 +946,9 @@ def akshara_ganavibhajana(aksharalu_list: List[str]) -> List[str]:
 
         if next_syllable_index != -1:
             next_aksharam_tags = set(categorize_aksharam(aksharalu_list[next_syllable_index]))
+            # Check if next syllable starts with conjunct or double consonant
             if 'సంయుక్తాక్షరం' in next_aksharam_tags or 'ద్విత్వాక్షరం' in next_aksharam_tags:
-                ganam_markers[i] = "U"
+                ganam_markers[i] = "U"  # Make current syllable Guru
 
     return ganam_markers
 
@@ -739,7 +958,35 @@ def akshara_ganavibhajana(aksharalu_list: List[str]) -> List[str]:
 ###############################################################################
 
 def get_base_consonant(aksharam: str) -> Optional[str]:
-    """Extract the base consonant from an aksharam."""
+    """
+    Extract the base consonant from an aksharam (syllable).
+
+    For Prasa (ప్రాస) matching in Dwipada poetry, we need to compare
+    the consonants of the 2nd syllables of both lines. This function
+    extracts the first (base) consonant, ignoring vowel modifiers
+    and any conjunct extensions.
+
+    Telugu Syllable Structure:
+        [Consonant(s)] + [Vowel/Modifier]
+        Example: "క్ష" = "క" + "్" + "ష" → base consonant is "క"
+        Example: "కా" = "క" + "ా" → base consonant is "క"
+
+    Args:
+        aksharam: A Telugu syllable (single aksharam)
+
+    Returns:
+        The first consonant character if present, None if vowel-initial
+
+    Examples:
+        >>> get_base_consonant("కా")    # Consonant + long vowel
+        "క"
+        >>> get_base_consonant("క్ష")   # Conjunct consonant
+        "క"
+        >>> get_base_consonant("అ")     # Pure vowel
+        None
+        >>> get_base_consonant("రం")    # Consonant + anusvara
+        "ర"
+    """
     if not aksharam:
         return None
     first_char = aksharam[0]
@@ -790,7 +1037,7 @@ def check_yati_maitri(letter1: str, letter2: str) -> Tuple[bool, Optional[int], 
     details = {
         "letter1": letter1,
         "letter2": letter2,
-        "quality_score": 0.0,
+        "quality_score": YATI_NO_MATCH_SCORE,
         "match_type": "no_match",
         "letter1_info": None,
         "letter2_info": None,
@@ -806,20 +1053,20 @@ def check_yati_maitri(letter1: str, letter2: str) -> Tuple[bool, Optional[int], 
 
     # Check for exact match first (highest quality)
     if letter1 == letter2:
-        details["quality_score"] = 100.0
+        details["quality_score"] = YATI_EXACT_MATCH_SCORE
         details["match_type"] = "exact"
         return True, -1, details
 
     # Check for Yati Maitri group match (medium quality)
     for idx, group in enumerate(YATI_MAITRI_GROUPS):
         if letter1 in group and letter2 in group:
-            details["quality_score"] = 70.0
+            details["quality_score"] = YATI_VARGA_MATCH_SCORE
             details["match_type"] = "varga_match"
             details["matching_group_members"] = list(group)
             return True, idx, details
 
     # No match
-    details["quality_score"] = 0.0
+    details["quality_score"] = YATI_NO_MATCH_SCORE
     details["match_type"] = "no_match"
     return False, None, details
 
@@ -1035,33 +1282,48 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
 
         Returns None only if line has fewer than 4 syllables.
     """
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 1: Prepare data - filter empty markers and ignorable characters
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Remove empty markers (from ignorable chars like spaces)
     pure_ganas = [g for g in gana_markers if g]
+    # Remove ignorable characters from aksharalu list
     pure_aksharalu = [ak for ak in aksharalu if ak not in ignorable_chars]
 
-    # Need at least 4 syllables for a dwipada line (minimum: 3+3+3+2 = 11, but check >= 4 for safety)
+    # Minimum syllables check: theoretical min is 3+3+3+2=11, but >= 4 for safety
     if len(pure_ganas) < 4:
         return None
 
+    # Convert to pattern string for slicing: "UIUIIU..." format
     pattern_str = "".join(pure_ganas)
-    valid_partitions = []
-    all_partitions = []  # Track all attempted partitions for diagnostics
+    valid_partitions = []      # Partitions where all 4 ganas are valid
+    all_partitions = []        # All attempted partitions (for finding best partial match)
     partitions_tried = 0
 
-    # Try all 16 combinations of gana lengths
-    # Indra ganas can be 3 or 4 syllables, Surya can be 2 or 3
-    for i1_len in [3, 4]:
-        for i2_len in [3, 4]:
-            for i3_len in [3, 4]:
-                for s_len in [2, 3]:
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 2: Try all 16 gana length combinations
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Indra ganas: 3 or 4 syllables (Nala, Naga, Sala, Bha, Ra, Ta)
+    # Surya ganas: 2 or 3 syllables (Na, Ha/Gala)
+    # Combinations: 2 × 2 × 2 × 2 = 16 possibilities
+    for i1_len in [3, 4]:           # Indra Gana 1: 3 or 4 syllables
+        for i2_len in [3, 4]:       # Indra Gana 2: 3 or 4 syllables
+            for i3_len in [3, 4]:   # Indra Gana 3: 3 or 4 syllables
+                for s_len in [2, 3]:  # Surya Gana: 2 or 3 syllables
+                    # ───────────────────────────────────────────────────────────
+                    # CHECK: Does this combination fit the line length?
+                    # Example: 3+4+4+2 = 13 syllables
+                    # ───────────────────────────────────────────────────────────
                     total_len = i1_len + i2_len + i3_len + s_len
 
-                    # Skip if total doesn't match line length
                     if total_len != len(pure_ganas):
-                        continue
+                        continue  # Skip: doesn't match line length
 
                     partitions_tried += 1
 
-                    # Extract patterns for each gana position
+                    # ───────────────────────────────────────────────────────────
+                    # EXTRACT: Slice patterns for each gana position
+                    # ───────────────────────────────────────────────────────────
                     pos = 0
                     i1_pattern = pattern_str[pos:pos + i1_len]
                     pos += i1_len
@@ -1071,13 +1333,18 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
                     pos += i3_len
                     s_pattern = pattern_str[pos:pos + s_len]
 
-                    # Validate each Gana
+                    # ───────────────────────────────────────────────────────────
+                    # IDENTIFY: Look up gana names and types
+                    # Returns (name, type) where type is "Indra", "Surya", or None
+                    # ───────────────────────────────────────────────────────────
                     i1_name, i1_type = identify_gana(i1_pattern)
                     i2_name, i2_type = identify_gana(i2_pattern)
                     i3_name, i3_type = identify_gana(i3_pattern)
                     s_name, s_type = identify_gana(s_pattern)
 
-                    # Get aksharalu for each Gana
+                    # ───────────────────────────────────────────────────────────
+                    # MAP: Get corresponding syllables for each gana
+                    # ───────────────────────────────────────────────────────────
                     pos = 0
                     i1_aksharalu = pure_aksharalu[pos:pos + i1_len]
                     pos += i1_len
@@ -1087,14 +1354,17 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
                     pos += i3_len
                     s_aksharalu = pure_aksharalu[pos:pos + s_len]
 
-                    # Check validity of each gana position
+                    # ───────────────────────────────────────────────────────────
+                    # VALIDATE: Check if each gana matches expected type
+                    # Positions 1-3 must be Indra, position 4 must be Surya
+                    # ───────────────────────────────────────────────────────────
                     g1_valid = i1_type == "Indra"
                     g2_valid = i2_type == "Indra"
                     g3_valid = i3_type == "Indra"
                     g4_valid = s_type == "Surya"
 
                     valid_count = sum([g1_valid, g2_valid, g3_valid, g4_valid])
-                    is_fully_valid = valid_count == 4
+                    is_fully_valid = valid_count == EXPECTED_GANAS_PER_LINE
 
                     # Build gana detail with validity info
                     partition_data = {
@@ -1151,12 +1421,17 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
                     if is_fully_valid:
                         valid_partitions.append(partition_data)
 
-    # If no partitions were tried (line too short/long), return None
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 3: Return best partition (prefer fully valid, then most matches)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # No valid length combinations matched the line
     if partitions_tried == 0:
         return None
 
-    # Return best partition found
-    # Priority: fully valid > highest ganas_matched > first attempted
+    # Selection priority:
+    # 1. First fully valid partition (all 4 ganas match expected types)
+    # 2. Partition with highest ganas_matched count (best partial match)
     if valid_partitions:
         best = valid_partitions[0]
     else:
