@@ -8,16 +8,12 @@ MODEL = "gemini-3-pro-preview"
 OUTPUT_FILE = Path(__file__).parent / "gemini_responses.txt"
 PROMPT = """
 The Updated Prompt
-Role: You are an expert Telugu Pandit and Maha Kavi (Great Poet) with deep knowledge of Telugu Chandassu (Prosody), specifically the Dwipada meter.
+Role: You are an expert Telugu and Sanskrit Scholar and Maha Kavi (Great Poet) with deep knowledge of Telugu Chandassu (Prosody), specifically the Dwipada meter.
 
 Task: Compose a Dwipada (ద్విపద) poem in Telugu on the topic: [INSERT TOPIC HERE].
-
 Strict Rules for Construction:
-
 Structure: The poem must have exactly 2 lines (Padas).
-
 Gana Sequence: Each line must strictly follow this sequence:
-
 Indra Gana - Indra Gana - Indra Gana - Surya Gana (Total 4 Ganas per line).
 
 Prasa (Rhyme): The second letter (hallu) of the first line must match the second letter of the second line (Prasa Niyamam).
@@ -25,21 +21,16 @@ Prasa (Rhyme): The second letter (hallu) of the first line must match the second
 Yati (Caesura):
 
 Rule: ఈ యతి స్థానంలో ఉండే అక్షరం పాదం మొదటి అక్షరంతో "యతి మైత్రి"లో ఉండాలనేది నియమం.
-
 Explanation: The first letter of the 3rd Gana (Yati Sthanam) must match the first letter of the 1st Gana (Pradhama Aksharam) according to Yati Maitri rules.
 
 Reference Data (Use strict adherence):
-
 Guru (U) / Laghu (I) Rules:
-
 Short vowels = I (Laghu)
 
 Long vowels / Dheergham = U (Guru)
 
 Letter before a Samyukta/Dvitva aksharam (conjunct consonant) = U
-
 Sunna (Anuswara) / Visarga included = U
-
 Pollu Hallu (ending with 'n', 'l') = U
 
 Allowed Ganas:
@@ -47,61 +38,39 @@ Allowed Ganas:
 Surya Ganas:
 
 Na (III)
-
 Ha / Gala (UI)
 
 Indra Ganas:
 
 Nala (IIII)
-
 Naga (IIIU)
-
 Sala (IIUI)
-
 Bha (UII)
-
 Ra (UIU)
-
 Ta (UUI)
 
 Yati Maitri Groups (Vargas - for matching 1st Gana start & 3rd Gana start):
 
 (అ, ఆ, ఐ, ఔ, హ, య, అం, అః)
-
 (ఇ, ఈ, ఎ, ఏ, ఋ)
-
 (ఉ, ఊ, ఒ, ఓ)
-
 (క, ఖ, గ, ఘ, క్ష)
-
 (చ, ఛ, జ, ఝ, శ, ష, స)
-
 (ట, ఠ, డ, ఢ)
-
 (త, థ, ద, ధ)
-
 (ప, ఫ, బ, భ, వ)
-
 (ర, ల, ఱ, ళ)
-
 (న, ణ)
-
 (మ, పు, ఫు, బు, భు, ము...)
 
 Output Format:
-
 The Poem: Present the 2-line Telugu poem clearly.
-
+The language should be very understandable and simple.
 Chandassu Analysis (Verification):
-
 Break down each line into Ganas.
-
 Mark the Guru (U) and Laghu (I) below the text.
-
 Identify the Gana names (e.g., Bha, Ra, Nala, Ha).
-
 Explicitly point out the Yati match (Prove that the 1st letter of Gana 1 & 1st letter of Gana 3 are in the same Varga).
-
 Explicitly point out the Prasa match (2nd letter of Line 1 & Line 2).
 
 """

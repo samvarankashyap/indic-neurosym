@@ -44,6 +44,8 @@ dependent_vowels = set(dependent_to_independent.keys())
 ignorable_chars = {' ', '\n', 'ఁ', '​'}  # space, newline, arasunna, zero-width space
 
 # Yati Maitri Groups (Vargas)
+# These groups define which letters can substitute for each other in Yati (యతి) matching
+# Letters in the same group are phonetically related and can satisfy Yati requirements
 YATI_MAITRI_GROUPS = [
     {"అ", "ఆ", "ఐ", "ఔ", "హ", "య", "అం", "అః"},
     {"ఇ", "ఈ", "ఎ", "ఏ", "ఋ"},
@@ -57,6 +59,522 @@ YATI_MAITRI_GROUPS = [
     {"న", "ణ"},
     {"మ", "పు", "ఫు", "బు", "భు", "ము"},
 ]
+
+# =============================================================================
+# CONSONANT CLASSIFICATION (వర్ణమాల విభజన)
+# =============================================================================
+# Telugu consonants are grouped by place of articulation (ఉచ్చారణ స్థానం)
+# Each varga shares similar mouth position when pronounced
+#
+# This classification is used for:
+# 1. Prasa mismatch diagnostics - explaining why consonants don't match
+# 2. Yati analysis - providing varga information for letter matching
+# 3. Educational purposes - showing phonetic relationships
+
+CONSONANT_VARGAS = {
+    # Velar (కంఠ్యము) - produced at the soft palate (back of mouth)
+    "క-వర్గము (Velar)": ["క", "ఖ", "గ", "ఘ", "ఙ"],
+
+    # Palatal (తాలవ్యము) - produced at the hard palate
+    # Includes sibilants (శ, ష, స) which share palatal articulation
+    "చ-వర్గము (Palatal)": ["చ", "ఛ", "జ", "ఝ", "ఞ", "శ", "ష", "స"],
+
+    # Retroflex (మూర్ధన్యము) - tongue curled back touching roof of mouth
+    "ట-వర్గము (Retroflex)": ["ట", "ఠ", "డ", "ఢ", "ణ"],
+
+    # Dental (దంత్యము) - tongue touches upper teeth
+    "త-వర్గము (Dental)": ["త", "థ", "ద", "ధ", "న"],
+
+    # Labial (ఓష్ఠ్యము) - produced with lips
+    "ప-వర్గము (Labial)": ["ప", "ఫ", "బ", "భ", "మ"],
+
+    # Semi-vowels and approximants (అంతస్థములు)
+    "య-వర్గము (Approximant)": ["య", "ర", "ల", "వ", "ళ", "ఱ"],
+
+    # Aspirate (ఊష్మము)
+    "హ-వర్గము (Aspirate)": ["హ"],
+}
+
+
+def get_consonant_varga(consonant: str) -> Optional[str]:
+    """
+    Get the varga (consonant class) for a Telugu consonant.
+
+    Telugu consonants are classified into vargas based on their place of
+    articulation (ఉచ్చారణ స్థానం). This function returns which varga
+    a given consonant belongs to.
+
+    Args:
+        consonant: A single Telugu consonant character (హల్లు)
+
+    Returns:
+        Varga name (e.g., "క-వర్గము (Velar)") or None if not a consonant
+
+    Example:
+        >>> get_consonant_varga("క")
+        "క-వర్గము (Velar)"
+        >>> get_consonant_varga("ధ")
+        "త-వర్గము (Dental)"
+        >>> get_consonant_varga("అ")
+        None  # అ is a vowel, not a consonant
+    """
+    if not consonant:
+        return None
+
+    for varga_name, consonants in CONSONANT_VARGAS.items():
+        if consonant in consonants:
+            return varga_name
+
+    return None
+
+
+def get_letter_info(letter: str) -> Dict:
+    """
+    Get complete classification information for a Telugu letter.
+
+    This function provides comprehensive details about any Telugu letter,
+    including whether it's a vowel or consonant, its varga classification,
+    and which Yati Maitri groups it belongs to.
+
+    Args:
+        letter: A single Telugu letter (vowel or consonant)
+
+    Returns:
+        Dictionary with the following keys:
+        - letter: The input letter
+        - type: "vowel" (అచ్చు), "consonant" (హల్లు), or "unknown"
+        - varga: Consonant varga name (only for consonants)
+        - yati_groups: List of Yati Maitri group indices this letter belongs to
+        - yati_group_members: List of all members in the letter's Yati groups
+
+    Example:
+        >>> get_letter_info("క")
+        {
+            "letter": "క",
+            "type": "consonant",
+            "varga": "క-వర్గము (Velar)",
+            "yati_groups": [3],
+            "yati_group_members": ["క", "ఖ", "గ", "ఘ", "క్ష"]
+        }
+    """
+    result = {
+        "letter": letter,
+        "type": "unknown",
+        "varga": None,
+        "yati_groups": [],
+        "yati_group_members": [],
+    }
+
+    if not letter:
+        return result
+
+    # Determine if vowel or consonant
+    if letter in independent_vowels or letter in dependent_vowels:
+        result["type"] = "vowel"
+    elif letter in telugu_consonants:
+        result["type"] = "consonant"
+        result["varga"] = get_consonant_varga(letter)
+
+    # Find Yati Maitri groups this letter belongs to
+    for idx, group in enumerate(YATI_MAITRI_GROUPS):
+        if letter in group:
+            result["yati_groups"].append(idx)
+            result["yati_group_members"].extend(list(group))
+
+    # Remove duplicates from group members while preserving order
+    seen = set()
+    unique_members = []
+    for member in result["yati_group_members"]:
+        if member not in seen:
+            seen.add(member)
+            unique_members.append(member)
+    result["yati_group_members"] = unique_members
+
+    return result
+
+
+# =============================================================================
+# SCORING HELPER FUNCTIONS
+# =============================================================================
+# These functions calculate percentage scores for different aspects of
+# Dwipada poetry analysis. Scores range from 0-100%.
+#
+# Scoring Philosophy:
+# - Gana matching: 25% per valid gana (4 ganas per line = 100%)
+# - Prasa: Binary - 100% if match, 0% if mismatch
+# - Yati: 100% for exact letter match, 70% for same varga, 0% for different
+
+# Weights for overall score calculation
+SCORE_WEIGHTS = {
+    "gana": 0.40,   # 40% weight - gana sequence is fundamental structure
+    "prasa": 0.35,  # 35% weight - prasa (rhyme) is essential for dwipada
+    "yati": 0.25,   # 25% weight - yati adds phonetic beauty
+}
+
+
+def calculate_gana_score(partition_result: Optional[Dict]) -> Dict:
+    """
+    Calculate the percentage score for gana matching.
+
+    A valid Dwipada line has 4 ganas: 3 Indra ganas + 1 Surya gana.
+    Each valid gana contributes 25% to the score (4 × 25% = 100%).
+
+    Args:
+        partition_result: The result from find_dwipada_gana_partition()
+                         Contains "ganas" list with each gana's validity
+
+    Returns:
+        Dictionary with:
+        - score: Float 0-100 representing percentage match
+        - ganas_matched: Number of valid ganas found (0-4)
+        - ganas_total: Expected number of ganas (4)
+        - details: List of per-gana validity info
+
+    Example:
+        >>> partition = find_dwipada_gana_partition(gana_markers, aksharalu)
+        >>> calculate_gana_score(partition)
+        {"score": 100.0, "ganas_matched": 4, "ganas_total": 4, "details": [...]}
+    """
+    result = {
+        "score": 0.0,
+        "ganas_matched": 0,
+        "ganas_total": 4,
+        "details": [],
+    }
+
+    if not partition_result or "ganas" not in partition_result:
+        return result
+
+    ganas = partition_result["ganas"]
+    valid_count = 0
+
+    for i, gana in enumerate(ganas, 1):
+        is_valid = gana.get("name") is not None
+        if is_valid:
+            valid_count += 1
+
+        result["details"].append({
+            "position": i,
+            "type": gana.get("type", "Unknown"),
+            "pattern": gana.get("pattern", ""),
+            "name": gana.get("name"),
+            "valid": is_valid,
+            "aksharalu": gana.get("aksharalu", []),
+        })
+
+    result["ganas_matched"] = valid_count
+    result["score"] = (valid_count / 4) * 100.0
+
+    return result
+
+
+def calculate_prasa_score(prasa_result: Optional[Dict]) -> Dict:
+    """
+    Calculate the percentage score for prasa (rhyme) matching.
+
+    Prasa is binary: either the 2nd syllable consonants match (100%) or
+    they don't (0%). This function also provides diagnostic information
+    about why a mismatch occurred.
+
+    Args:
+        prasa_result: Dictionary containing prasa analysis results
+                     with "match", "line1_consonant", "line2_consonant" keys
+
+    Returns:
+        Dictionary with:
+        - score: Float 0 or 100
+        - match: Boolean indicating if prasa matches
+        - mismatch_details: Diagnostic info if mismatch (None if match)
+
+    Example:
+        >>> prasa = {"match": False, "line1_consonant": "ధ", "line2_consonant": "మ"}
+        >>> calculate_prasa_score(prasa)
+        {"score": 0.0, "match": False, "mismatch_details": {...}}
+    """
+    result = {
+        "score": 0.0,
+        "match": False,
+        "mismatch_details": None,
+    }
+
+    if not prasa_result:
+        return result
+
+    is_match = prasa_result.get("match", False)
+    result["match"] = is_match
+    result["score"] = 100.0 if is_match else 0.0
+
+    # Generate mismatch diagnostics if not matching
+    if not is_match:
+        cons1 = prasa_result.get("line1_consonant")
+        cons2 = prasa_result.get("line2_consonant")
+        varga1 = get_consonant_varga(cons1) if cons1 else None
+        varga2 = get_consonant_varga(cons2) if cons2 else None
+
+        result["mismatch_details"] = {
+            "line1_full_breakdown": {
+                "aksharam": prasa_result.get("line1_second_aksharam"),
+                "consonant": cons1,
+                "consonant_varga": varga1,
+            },
+            "line2_full_breakdown": {
+                "aksharam": prasa_result.get("line2_second_aksharam"),
+                "consonant": cons2,
+                "consonant_varga": varga2,
+            },
+            "why_mismatch": _generate_prasa_mismatch_explanation(cons1, cons2, varga1, varga2),
+            "suggestion": _generate_prasa_suggestion(cons1),
+        }
+
+    return result
+
+
+def _generate_prasa_mismatch_explanation(cons1: str, cons2: str,
+                                         varga1: Optional[str],
+                                         varga2: Optional[str]) -> str:
+    """
+    Generate a human-readable explanation for why prasa doesn't match.
+
+    This helper function creates educational diagnostic messages explaining
+    why two consonants don't satisfy the prasa requirement.
+
+    Args:
+        cons1: First consonant
+        cons2: Second consonant
+        varga1: Varga of first consonant
+        varga2: Varga of second consonant
+
+    Returns:
+        Explanation string in Telugu/English mixed format
+    """
+    if not cons1 or not cons2:
+        return "One or both lines don't have a valid consonant in 2nd position"
+
+    if varga1 and varga2:
+        if varga1 == varga2:
+            return f"Consonants '{cons1}' and '{cons2}' are from same varga ({varga1}) but prasa requires exact match"
+        else:
+            return f"Consonants '{cons1}' ({varga1}) and '{cons2}' ({varga2}) are from different vargas"
+
+    return f"Consonants '{cons1}' and '{cons2}' do not match - prasa requires identical consonants"
+
+
+def _generate_prasa_suggestion(consonant: str) -> str:
+    """
+    Generate a suggestion for fixing prasa mismatch.
+
+    Provides examples of syllables that would create valid prasa
+    with the given consonant.
+
+    Args:
+        consonant: The consonant from line 1's 2nd syllable
+
+    Returns:
+        Suggestion string with example valid syllables
+    """
+    if not consonant:
+        return "Unable to generate suggestion - no valid consonant found"
+
+    # Common vowel combinations for examples
+    vowels = ["", "ా", "ి", "ీ", "ు", "ూ", "ె", "ే", "ో"]
+    examples = [consonant + v for v in vowels[:5]]
+
+    return f"Line 2 needs 2nd syllable with '{consonant}' consonant (e.g., {', '.join(examples)}...)"
+
+
+def calculate_yati_score(yati_result: Optional[Dict]) -> Dict:
+    """
+    Calculate the percentage score for yati (alliteration) matching.
+
+    Yati scoring is nuanced:
+    - 100%: Exact letter match (same letter in 1st and 3rd gana positions)
+    - 70%: Same Yati Maitri varga (phonetically related letters)
+    - 0%: Different vargas (no phonetic relationship)
+
+    Args:
+        yati_result: Dictionary containing yati analysis with
+                    "match", "first_gana_letter", "third_gana_letter" keys
+
+    Returns:
+        Dictionary with:
+        - score: Float 0, 70, or 100
+        - quality: "exact", "varga_match", or "no_match"
+        - mismatch_details: Diagnostic info (always provided for transparency)
+
+    Example:
+        >>> yati = {"match": True, "first_gana_letter": "స", "third_gana_letter": "స"}
+        >>> calculate_yati_score(yati)
+        {"score": 100.0, "quality": "exact", "mismatch_details": {...}}
+    """
+    result = {
+        "score": 0.0,
+        "quality": "no_match",
+        "mismatch_details": None,
+    }
+
+    if not yati_result:
+        return result
+
+    letter1 = yati_result.get("first_gana_letter")
+    letter2 = yati_result.get("third_gana_letter")
+    is_match = yati_result.get("match", False)
+    group_idx = yati_result.get("group_index")
+
+    # Get detailed letter information
+    info1 = get_letter_info(letter1) if letter1 else None
+    info2 = get_letter_info(letter2) if letter2 else None
+
+    # Determine quality of match
+    if is_match:
+        if letter1 == letter2:
+            result["score"] = 100.0
+            result["quality"] = "exact"
+        else:
+            # Same varga but different letter
+            result["score"] = 70.0
+            result["quality"] = "varga_match"
+    else:
+        result["score"] = 0.0
+        result["quality"] = "no_match"
+
+    # Always provide letter details for educational purposes
+    result["mismatch_details"] = {
+        "letter1_info": info1,
+        "letter2_info": info2,
+        "why_result": _generate_yati_explanation(letter1, letter2, is_match, info1, info2),
+        "suggestion": _generate_yati_suggestion(letter1, info1) if not is_match else None,
+    }
+
+    return result
+
+
+def _generate_yati_explanation(letter1: str, letter2: str, is_match: bool,
+                               info1: Optional[Dict], info2: Optional[Dict]) -> str:
+    """
+    Generate a human-readable explanation for yati match result.
+
+    Args:
+        letter1: First letter (1st gana start)
+        letter2: Second letter (3rd gana start)
+        is_match: Whether yati is satisfied
+        info1: Letter info for first letter
+        info2: Letter info for second letter
+
+    Returns:
+        Explanation string describing why yati matches or doesn't
+    """
+    if not letter1 or not letter2:
+        return "Unable to determine yati - missing letter information"
+
+    if letter1 == letter2:
+        return f"Exact match: both positions have '{letter1}' → MATCH (100%)"
+
+    if is_match:
+        # Same varga match
+        groups1 = info1.get("yati_group_members", []) if info1 else []
+        return f"'{letter1}' and '{letter2}' belong to same Yati Maitri group {groups1} → MATCH (70%)"
+
+    # No match - explain why
+    varga1 = info1.get("varga") if info1 else None
+    varga2 = info2.get("varga") if info2 else None
+
+    if varga1 and varga2:
+        return f"'{letter1}' is in {varga1}, '{letter2}' is in {varga2} → NO MATCH"
+
+    return f"'{letter1}' and '{letter2}' are not in the same Yati Maitri group → NO MATCH"
+
+
+def _generate_yati_suggestion(letter: str, info: Optional[Dict]) -> str:
+    """
+    Generate a suggestion for fixing yati mismatch.
+
+    Args:
+        letter: The letter from 1st gana position
+        info: Letter info dict
+
+    Returns:
+        Suggestion string with valid alternatives
+    """
+    if not letter or not info:
+        return "Unable to generate suggestion"
+
+    group_members = info.get("yati_group_members", [])
+    if group_members:
+        return f"1st syllable of 3rd gana should start with: {', '.join(group_members)}"
+
+    return f"1st syllable of 3rd gana should start with '{letter}' or related letters"
+
+
+def calculate_overall_score(gana_score1: Dict, gana_score2: Dict,
+                           prasa_score: Dict,
+                           yati_score1: Dict, yati_score2: Dict) -> Dict:
+    """
+    Calculate the weighted overall match score for a Dwipada couplet.
+
+    This function combines individual scores from gana, prasa, and yati
+    analysis into a single percentage score using configurable weights.
+
+    Weights (defined in SCORE_WEIGHTS):
+    - Gana: 40% (average of both lines)
+    - Prasa: 35%
+    - Yati: 25% (average of both lines)
+
+    Args:
+        gana_score1: Gana score dict for line 1
+        gana_score2: Gana score dict for line 2
+        prasa_score: Prasa score dict for the couplet
+        yati_score1: Yati score dict for line 1
+        yati_score2: Yati score dict for line 2
+
+    Returns:
+        Dictionary with:
+        - overall: Float 0-100 representing weighted average
+        - breakdown: Individual component scores
+        - weights: The weights used for calculation
+
+    Example:
+        >>> calculate_overall_score(gana1, gana2, prasa, yati1, yati2)
+        {
+            "overall": 85.0,
+            "breakdown": {
+                "gana_line1": 100.0, "gana_line2": 75.0,
+                "prasa": 100.0, "yati_line1": 70.0, "yati_line2": 100.0
+            },
+            "weights": {"gana": 0.40, "prasa": 0.35, "yati": 0.25}
+        }
+    """
+    # Extract individual scores
+    gana1 = gana_score1.get("score", 0.0)
+    gana2 = gana_score2.get("score", 0.0)
+    prasa = prasa_score.get("score", 0.0)
+    yati1 = yati_score1.get("score", 0.0)
+    yati2 = yati_score2.get("score", 0.0)
+
+    # Calculate averages for multi-line components
+    avg_gana = (gana1 + gana2) / 2
+    avg_yati = (yati1 + yati2) / 2
+
+    # Calculate weighted overall score
+    overall = (
+        avg_gana * SCORE_WEIGHTS["gana"] +
+        prasa * SCORE_WEIGHTS["prasa"] +
+        avg_yati * SCORE_WEIGHTS["yati"]
+    )
+
+    return {
+        "overall": round(overall, 1),
+        "breakdown": {
+            "gana_line1": gana1,
+            "gana_line2": gana2,
+            "gana_average": round(avg_gana, 1),
+            "prasa": prasa,
+            "yati_line1": yati1,
+            "yati_line2": yati2,
+            "yati_average": round(avg_yati, 1),
+        },
+        "weights": SCORE_WEIGHTS.copy(),
+    }
+
 
 # Indra Gana patterns (3 or 4 syllables)
 INDRA_GANAS = {
@@ -237,39 +755,122 @@ def get_first_letter(aksharam: str) -> Optional[str]:
     return aksharam[0]
 
 
-def check_yati_maitri(letter1: str, letter2: str) -> Tuple[bool, Optional[int]]:
+def check_yati_maitri(letter1: str, letter2: str) -> Tuple[bool, Optional[int], Dict]:
     """
     Check if two letters belong to the same Yati Maitri group.
+
+    Yati (యతి) is the rule of phonetic harmony in Telugu poetry.
+    The 1st letter of the 1st gana must match (or be phonetically related to)
+    the 1st letter of the 3rd gana in a Dwipada line.
+
+    Match quality levels:
+    - Exact match: Same letter (100% quality)
+    - Varga match: Same Yati Maitri group (70% quality)
+    - No match: Different groups (0% quality)
+
+    Args:
+        letter1: First letter (from 1st gana start)
+        letter2: Second letter (from 3rd gana start)
+
+    Returns:
+        Tuple of (is_match, group_index, details_dict) where:
+        - is_match: Boolean indicating if yati is satisfied
+        - group_index: Index of matching group (-1 for exact, None for no match)
+        - details_dict: Contains quality_score, match_type, and letter info
+
+    Example:
+        >>> match, idx, details = check_yati_maitri("స", "స")
+        >>> match, details["quality_score"], details["match_type"]
+        (True, 100.0, "exact")
+
+        >>> match, idx, details = check_yati_maitri("క", "గ")
+        >>> match, details["quality_score"], details["match_type"]
+        (True, 70.0, "varga_match")
+    """
+    details = {
+        "letter1": letter1,
+        "letter2": letter2,
+        "quality_score": 0.0,
+        "match_type": "no_match",
+        "letter1_info": None,
+        "letter2_info": None,
+        "matching_group_members": None,
+    }
+
+    if not letter1 or not letter2:
+        return False, None, details
+
+    # Get detailed info for both letters
+    details["letter1_info"] = get_letter_info(letter1)
+    details["letter2_info"] = get_letter_info(letter2)
+
+    # Check for exact match first (highest quality)
+    if letter1 == letter2:
+        details["quality_score"] = 100.0
+        details["match_type"] = "exact"
+        return True, -1, details
+
+    # Check for Yati Maitri group match (medium quality)
+    for idx, group in enumerate(YATI_MAITRI_GROUPS):
+        if letter1 in group and letter2 in group:
+            details["quality_score"] = 70.0
+            details["match_type"] = "varga_match"
+            details["matching_group_members"] = list(group)
+            return True, idx, details
+
+    # No match
+    details["quality_score"] = 0.0
+    details["match_type"] = "no_match"
+    return False, None, details
+
+
+def check_yati_maitri_simple(letter1: str, letter2: str) -> Tuple[bool, Optional[int]]:
+    """
+    Simple version of check_yati_maitri for backward compatibility.
+
+    Returns only (is_match, group_index) without detailed diagnostics.
+    Use check_yati_maitri() for full analysis with quality scoring.
+
+    Args:
+        letter1: First letter
+        letter2: Second letter
 
     Returns:
         Tuple of (is_match, group_index)
     """
-    if not letter1 or not letter2:
-        return False, None
-
-    for idx, group in enumerate(YATI_MAITRI_GROUPS):
-        if letter1 in group and letter2 in group:
-            return True, idx
-
-    # Same letter is always a match
-    if letter1 == letter2:
-        return True, -1
-
-    return False, None
+    is_match, group_idx, _ = check_yati_maitri(letter1, letter2)
+    return is_match, group_idx
 
 
 def check_prasa(line1: str, line2: str) -> Tuple[bool, Dict]:
     """
     Check Prasa (rhyme) between two lines.
 
-    Prasa rule: 2nd aksharam's base consonant must match between the two lines.
+    Prasa rule: The 2nd aksharam's base consonant must match between the two lines.
+    This is the fundamental rhyming requirement for Dwipada poetry.
+
+    This enhanced version provides detailed mismatch diagnostics including:
+    - Full aksharam breakdown (consonant, vowel, varga)
+    - Explanation of why mismatch occurred
+    - Suggestions for fixing the mismatch
 
     Args:
         line1: First line of dwipada
         line2: Second line of dwipada
 
     Returns:
-        Tuple of (is_match, details_dict)
+        Tuple of (is_match, details_dict) where details_dict contains:
+        - line1_second_aksharam: The 2nd syllable from line 1
+        - line1_consonant: Base consonant of line 1's 2nd syllable
+        - line2_second_aksharam: The 2nd syllable from line 2
+        - line2_consonant: Base consonant of line 2's 2nd syllable
+        - match: Boolean indicating if prasa is satisfied
+        - mismatch_details: Diagnostic info when match is False (None if match)
+
+    Example:
+        >>> is_match, details = check_prasa("సౌధాగ్రముల యందు", "వీధుల యందును")
+        >>> is_match
+        True  # Both have 'ధ' as 2nd consonant
     """
     # Split lines into aksharalu
     aksharalu1 = split_aksharalu(line1)
@@ -291,16 +892,79 @@ def check_prasa(line1: str, line2: str) -> Tuple[bool, Dict]:
     consonant1 = get_base_consonant(second_ak1)
     consonant2 = get_base_consonant(second_ak2)
 
-    # Compare
+    # Compare consonants
     is_match = consonant1 == consonant2 if consonant1 and consonant2 else False
 
-    return is_match, {
+    # Build result dictionary
+    result = {
         "line1_second_aksharam": second_ak1,
         "line1_consonant": consonant1,
         "line2_second_aksharam": second_ak2,
         "line2_consonant": consonant2,
-        "match": is_match
+        "match": is_match,
+        "mismatch_details": None,
     }
+
+    # Add detailed diagnostics if not matching
+    if not is_match:
+        varga1 = get_consonant_varga(consonant1) if consonant1 else None
+        varga2 = get_consonant_varga(consonant2) if consonant2 else None
+
+        # Extract vowel from aksharam for full breakdown
+        vowel1 = _extract_vowel_from_aksharam(second_ak1)
+        vowel2 = _extract_vowel_from_aksharam(second_ak2)
+
+        result["mismatch_details"] = {
+            "line1_full_breakdown": {
+                "aksharam": second_ak1,
+                "consonant": consonant1,
+                "vowel": vowel1,
+                "consonant_varga": varga1,
+            },
+            "line2_full_breakdown": {
+                "aksharam": second_ak2,
+                "consonant": consonant2,
+                "vowel": vowel2,
+                "consonant_varga": varga2,
+            },
+            "why_mismatch": _generate_prasa_mismatch_explanation(consonant1, consonant2, varga1, varga2),
+            "suggestion": _generate_prasa_suggestion(consonant1),
+        }
+
+    return is_match, result
+
+
+def _extract_vowel_from_aksharam(aksharam: str) -> str:
+    """
+    Extract the vowel component from a Telugu aksharam.
+
+    An aksharam typically consists of:
+    - Consonant(s) + dependent vowel (e.g., కా = క + ా)
+    - Or standalone vowel (e.g., అ, ఆ)
+
+    If no explicit vowel marker, returns "అ (implicit)" since Telugu
+    consonants without vowel markers have inherent 'అ' sound.
+
+    Args:
+        aksharam: A Telugu syllable
+
+    Returns:
+        The vowel part as a string (e.g., "ా", "ి", or "అ (implicit)")
+    """
+    if not aksharam:
+        return ""
+
+    # Check for dependent vowels
+    for dv in dependent_vowels:
+        if dv in aksharam:
+            return dv
+
+    # Check if it's an independent vowel
+    if aksharam[0] in independent_vowels:
+        return aksharam[0]
+
+    # No explicit vowel - inherent 'అ' sound
+    return "అ (implicit)"
 
 
 def check_prasa_aksharalu(aksharam1: str, aksharam2: str) -> Tuple[bool, Dict]:
@@ -348,18 +1012,42 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
     """
     Try to find a valid Dwipada Gana partition (3 Indra + 1 Surya).
 
+    This function tries all 16 possible combinations of gana lengths:
+    - Indra ganas: 3 or 4 syllables (2 choices × 3 ganas = 8 combinations)
+    - Surya gana: 2 or 3 syllables (2 choices)
+    - Total: 2 × 2 × 2 × 2 = 16 combinations
+
+    The function returns the best partition found, with detailed information
+    about how many ganas matched and which ones failed.
+
+    Args:
+        gana_markers: List of "U" (Guru) and "I" (Laghu) markers
+        aksharalu: List of syllables corresponding to the markers
+
     Returns:
-        Dict with partition details or None if no valid partition found
+        Dict with partition details including:
+        - ganas: List of 4 gana dicts with name, pattern, aksharalu, type, valid
+        - total_syllables: Number of syllables in the line
+        - ganas_matched: How many of 4 ganas are valid (0-4)
+        - all_partitions_tried: Total partition combinations attempted
+        - valid_partitions_found: How many fully valid partitions exist
+        - is_fully_valid: True if all 4 ganas match expected types
+
+        Returns None only if line has fewer than 4 syllables.
     """
     pure_ganas = [g for g in gana_markers if g]
     pure_aksharalu = [ak for ak in aksharalu if ak not in ignorable_chars]
 
+    # Need at least 4 syllables for a dwipada line (minimum: 3+3+3+2 = 11, but check >= 4 for safety)
     if len(pure_ganas) < 4:
         return None
 
     pattern_str = "".join(pure_ganas)
     valid_partitions = []
+    all_partitions = []  # Track all attempted partitions for diagnostics
+    partitions_tried = 0
 
+    # Try all 16 combinations of gana lengths
     # Indra ganas can be 3 or 4 syllables, Surya can be 2 or 3
     for i1_len in [3, 4]:
         for i2_len in [3, 4]:
@@ -367,10 +1055,13 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
                 for s_len in [2, 3]:
                     total_len = i1_len + i2_len + i3_len + s_len
 
+                    # Skip if total doesn't match line length
                     if total_len != len(pure_ganas):
                         continue
 
-                    # Extract patterns
+                    partitions_tried += 1
+
+                    # Extract patterns for each gana position
                     pos = 0
                     i1_pattern = pattern_str[pos:pos + i1_len]
                     pos += i1_len
@@ -386,32 +1077,97 @@ def find_dwipada_gana_partition(gana_markers: List[str], aksharalu: List[str]) -
                     i3_name, i3_type = identify_gana(i3_pattern)
                     s_name, s_type = identify_gana(s_pattern)
 
-                    if (i1_type == "Indra" and i2_type == "Indra" and
-                        i3_type == "Indra" and s_type == "Surya"):
+                    # Get aksharalu for each Gana
+                    pos = 0
+                    i1_aksharalu = pure_aksharalu[pos:pos + i1_len]
+                    pos += i1_len
+                    i2_aksharalu = pure_aksharalu[pos:pos + i2_len]
+                    pos += i2_len
+                    i3_aksharalu = pure_aksharalu[pos:pos + i3_len]
+                    pos += i3_len
+                    s_aksharalu = pure_aksharalu[pos:pos + s_len]
 
-                        # Get aksharalu for each Gana
-                        pos = 0
-                        i1_aksharalu = pure_aksharalu[pos:pos + i1_len]
-                        pos += i1_len
-                        i2_aksharalu = pure_aksharalu[pos:pos + i2_len]
-                        pos += i2_len
-                        i3_aksharalu = pure_aksharalu[pos:pos + i3_len]
-                        pos += i3_len
-                        s_aksharalu = pure_aksharalu[pos:pos + s_len]
+                    # Check validity of each gana position
+                    g1_valid = i1_type == "Indra"
+                    g2_valid = i2_type == "Indra"
+                    g3_valid = i3_type == "Indra"
+                    g4_valid = s_type == "Surya"
 
-                        valid_partitions.append({
-                            "ganas": [
-                                {"name": i1_name, "pattern": i1_pattern, "aksharalu": i1_aksharalu, "type": "Indra"},
-                                {"name": i2_name, "pattern": i2_pattern, "aksharalu": i2_aksharalu, "type": "Indra"},
-                                {"name": i3_name, "pattern": i3_pattern, "aksharalu": i3_aksharalu, "type": "Indra"},
-                                {"name": s_name, "pattern": s_pattern, "aksharalu": s_aksharalu, "type": "Surya"},
-                            ],
-                            "total_syllables": len(pure_ganas)
-                        })
+                    valid_count = sum([g1_valid, g2_valid, g3_valid, g4_valid])
+                    is_fully_valid = valid_count == 4
 
+                    # Build gana detail with validity info
+                    partition_data = {
+                        "ganas": [
+                            {
+                                "position": 1,
+                                "name": i1_name,
+                                "pattern": i1_pattern,
+                                "aksharalu": i1_aksharalu,
+                                "type": "Indra",
+                                "expected_type": "Indra",
+                                "valid": g1_valid,
+                                "error": None if g1_valid else f"Pattern '{i1_pattern}' is not a valid Indra gana"
+                            },
+                            {
+                                "position": 2,
+                                "name": i2_name,
+                                "pattern": i2_pattern,
+                                "aksharalu": i2_aksharalu,
+                                "type": "Indra",
+                                "expected_type": "Indra",
+                                "valid": g2_valid,
+                                "error": None if g2_valid else f"Pattern '{i2_pattern}' is not a valid Indra gana"
+                            },
+                            {
+                                "position": 3,
+                                "name": i3_name,
+                                "pattern": i3_pattern,
+                                "aksharalu": i3_aksharalu,
+                                "type": "Indra",
+                                "expected_type": "Indra",
+                                "valid": g3_valid,
+                                "error": None if g3_valid else f"Pattern '{i3_pattern}' is not a valid Indra gana"
+                            },
+                            {
+                                "position": 4,
+                                "name": s_name,
+                                "pattern": s_pattern,
+                                "aksharalu": s_aksharalu,
+                                "type": "Surya",
+                                "expected_type": "Surya",
+                                "valid": g4_valid,
+                                "error": None if g4_valid else f"Pattern '{s_pattern}' is not a valid Surya gana"
+                            },
+                        ],
+                        "total_syllables": len(pure_ganas),
+                        "ganas_matched": valid_count,
+                        "is_fully_valid": is_fully_valid,
+                        "partition_lengths": [i1_len, i2_len, i3_len, s_len],
+                    }
+
+                    all_partitions.append(partition_data)
+
+                    if is_fully_valid:
+                        valid_partitions.append(partition_data)
+
+    # If no partitions were tried (line too short/long), return None
+    if partitions_tried == 0:
+        return None
+
+    # Return best partition found
+    # Priority: fully valid > highest ganas_matched > first attempted
     if valid_partitions:
-        return valid_partitions[0]
-    return None
+        best = valid_partitions[0]
+    else:
+        # Find partition with most valid ganas
+        best = max(all_partitions, key=lambda p: p["ganas_matched"])
+
+    # Add metadata about all attempts
+    best["all_partitions_tried"] = partitions_tried
+    best["valid_partitions_found"] = len(valid_partitions)
+
+    return best
 
 
 def analyze_pada(line: str) -> Dict:
@@ -457,56 +1213,104 @@ def analyze_dwipada(poem: str) -> Dict:
     """
     Analyze a complete Dwipada (2 lines separated by newline).
 
+    This is the main analysis function that provides comprehensive feedback on
+    a Dwipada couplet including:
+    - Per-line gana partition analysis
+    - Prasa (rhyme) verification with mismatch diagnostics
+    - Yati (alliteration) verification with quality scoring
+    - Overall percentage match score
+
     Args:
         poem: A string containing two lines separated by newline character
 
     Returns:
-        Dict with complete analysis including Prasa and Yati verification
+        Dict with complete analysis including:
+        - pada1, pada2: Per-line analysis results
+        - prasa: Prasa check with mismatch details if applicable
+        - yati_line1, yati_line2: Yati check with quality scores
+        - is_valid_dwipada: Boolean - True if all rules satisfied
+        - match_score: Percentage scores (overall and breakdown)
+        - validation_summary: Quick boolean summary of all checks
+
+    Example:
+        >>> analysis = analyze_dwipada("సౌధాగ్రముల యందు సదనంబు లందు\\nవీధుల యందును వెఱవొప్ప నిలిచి")
+        >>> analysis["is_valid_dwipada"]
+        True
+        >>> analysis["match_score"]["overall"]
+        100.0
     """
     lines = [l.strip() for l in poem.strip().split('\n') if l.strip()]
     if len(lines) < 2:
         raise ValueError("Dwipada must have 2 lines separated by newline")
     line1, line2 = lines[0], lines[1]
 
+    # Analyze each pada (line)
     pada1 = analyze_pada(line1)
     pada2 = analyze_pada(line2)
 
-    # Check Prasa (2nd letter consonant match)
-    prasa_match = False
-    prasa_details = None
-    if pada1["second_consonant"] and pada2["second_consonant"]:
-        prasa_match = pada1["second_consonant"] == pada2["second_consonant"]
-        prasa_details = {
-            "line1_second_aksharam": pada1["second_aksharam"],
-            "line1_consonant": pada1["second_consonant"],
-            "line2_second_aksharam": pada2["second_aksharam"],
-            "line2_consonant": pada2["second_consonant"],
-            "match": prasa_match
-        }
+    # Use enhanced check_prasa with full mismatch diagnostics
+    prasa_match, prasa_details = check_prasa(line1, line2)
 
-    # Check Yati for each line
+    # Check Yati for each line with enhanced diagnostics
     yati_line1 = None
     yati_line2 = None
+    yati_details1 = None
+    yati_details2 = None
 
     if pada1["first_letter"] and pada1["third_gana_first_letter"]:
-        match, group_idx = check_yati_maitri(pada1["first_letter"], pada1["third_gana_first_letter"])
+        match, group_idx, yati_details1 = check_yati_maitri(
+            pada1["first_letter"],
+            pada1["third_gana_first_letter"]
+        )
         yati_line1 = {
             "first_gana_letter": pada1["first_letter"],
             "third_gana_letter": pada1["third_gana_first_letter"],
             "match": match,
-            "group_index": group_idx
+            "group_index": group_idx,
+            "quality_score": yati_details1.get("quality_score", 0.0),
+            "match_type": yati_details1.get("match_type", "no_match"),
+            "mismatch_details": yati_details1,
         }
 
     if pada2["first_letter"] and pada2["third_gana_first_letter"]:
-        match, group_idx = check_yati_maitri(pada2["first_letter"], pada2["third_gana_first_letter"])
+        match, group_idx, yati_details2 = check_yati_maitri(
+            pada2["first_letter"],
+            pada2["third_gana_first_letter"]
+        )
         yati_line2 = {
             "first_gana_letter": pada2["first_letter"],
             "third_gana_letter": pada2["third_gana_first_letter"],
             "match": match,
-            "group_index": group_idx
+            "group_index": group_idx,
+            "quality_score": yati_details2.get("quality_score", 0.0),
+            "match_type": yati_details2.get("match_type", "no_match"),
+            "mismatch_details": yati_details2,
         }
 
-    # Overall validity
+    # Calculate scores for each component
+    gana_score1 = calculate_gana_score(pada1.get("partition"))
+    gana_score2 = calculate_gana_score(pada2.get("partition"))
+    prasa_score_result = calculate_prasa_score(prasa_details)
+    yati_score1 = calculate_yati_score(yati_line1)
+    yati_score2 = calculate_yati_score(yati_line2)
+
+    # Calculate overall weighted score
+    match_score = calculate_overall_score(
+        gana_score1, gana_score2,
+        prasa_score_result,
+        yati_score1, yati_score2
+    )
+
+    # Add component scores to match_score breakdown
+    match_score["component_scores"] = {
+        "gana_line1": gana_score1,
+        "gana_line2": gana_score2,
+        "prasa": prasa_score_result,
+        "yati_line1": yati_score1,
+        "yati_line2": yati_score2,
+    }
+
+    # Determine overall validity (binary pass/fail for strict validation)
     is_valid = (
         pada1["is_valid_gana_sequence"] and
         pada2["is_valid_gana_sequence"] and
@@ -522,6 +1326,7 @@ def analyze_dwipada(poem: str) -> Dict:
         "yati_line1": yati_line1,
         "yati_line2": yati_line2,
         "is_valid_dwipada": is_valid,
+        "match_score": match_score,
         "validation_summary": {
             "gana_sequence_line1": pada1["is_valid_gana_sequence"],
             "gana_sequence_line2": pada2["is_valid_gana_sequence"],
@@ -533,11 +1338,32 @@ def analyze_dwipada(poem: str) -> Dict:
 
 
 def format_analysis_report(analysis: Dict) -> str:
-    """Format the analysis as a readable report."""
+    """
+    Format the analysis as a human-readable report.
+
+    This function creates a comprehensive report showing:
+    - Per-line analysis with gana breakdown
+    - Prasa (rhyme) analysis with mismatch diagnostics
+    - Yati (alliteration) analysis with quality scores
+    - Overall match percentage and validation summary
+
+    Args:
+        analysis: Dict returned by analyze_dwipada()
+
+    Returns:
+        Formatted string report suitable for display
+    """
     lines = []
     lines.append("=" * 70)
     lines.append("DWIPADA CHANDASSU ANALYSIS REPORT")
     lines.append("=" * 70)
+
+    # Match Score Summary (NEW - show percentage at top)
+    if "match_score" in analysis:
+        score = analysis["match_score"]
+        overall = score.get("overall", 0)
+        lines.append(f"\n📊 OVERALL MATCH SCORE: {overall:.1f}%")
+        lines.append("-" * 35)
 
     # Line 1 Analysis
     lines.append("\n--- LINE 1 (పాదము 1) ---")
@@ -547,10 +1373,17 @@ def format_analysis_report(analysis: Dict) -> str:
     lines.append(f"Gana Markers: {' '.join(pada1['gana_markers'])}")
 
     if pada1["partition"]:
-        lines.append("\nGana Breakdown:")
-        for i, gana in enumerate(pada1["partition"]["ganas"], 1):
+        partition = pada1["partition"]
+        ganas_matched = partition.get("ganas_matched", 4)
+        lines.append(f"\nGana Breakdown ({ganas_matched}/4 valid):")
+        for gana in partition["ganas"]:
             gana_type_label = "ఇంద్ర గణము" if gana["type"] == "Indra" else "సూర్య గణము"
-            lines.append(f"  Gana {i}: {''.join(gana['aksharalu'])} = {gana['pattern']} = {gana['name']} ({gana_type_label})")
+            valid_mark = "✓" if gana.get("valid", True) else "✗"
+            name_str = gana['name'] if gana['name'] else "[Invalid]"
+            lines.append(f"  {valid_mark} Gana {gana.get('position', '?')}: {''.join(gana['aksharalu'])} = {gana['pattern']} = {name_str} ({gana_type_label})")
+            # Show error message if gana is invalid
+            if not gana.get("valid", True) and gana.get("error"):
+                lines.append(f"      ↳ {gana['error']}")
     else:
         lines.append("\n[WARNING] Could not find valid 3 Indra + 1 Surya Gana partition")
 
@@ -562,14 +1395,20 @@ def format_analysis_report(analysis: Dict) -> str:
     lines.append(f"Gana Markers: {' '.join(pada2['gana_markers'])}")
 
     if pada2["partition"]:
-        lines.append("\nGana Breakdown:")
-        for i, gana in enumerate(pada2["partition"]["ganas"], 1):
+        partition = pada2["partition"]
+        ganas_matched = partition.get("ganas_matched", 4)
+        lines.append(f"\nGana Breakdown ({ganas_matched}/4 valid):")
+        for gana in partition["ganas"]:
             gana_type_label = "ఇంద్ర గణము" if gana["type"] == "Indra" else "సూర్య గణము"
-            lines.append(f"  Gana {i}: {''.join(gana['aksharalu'])} = {gana['pattern']} = {gana['name']} ({gana_type_label})")
+            valid_mark = "✓" if gana.get("valid", True) else "✗"
+            name_str = gana['name'] if gana['name'] else "[Invalid]"
+            lines.append(f"  {valid_mark} Gana {gana.get('position', '?')}: {''.join(gana['aksharalu'])} = {gana['pattern']} = {name_str} ({gana_type_label})")
+            if not gana.get("valid", True) and gana.get("error"):
+                lines.append(f"      ↳ {gana['error']}")
     else:
         lines.append("\n[WARNING] Could not find valid 3 Indra + 1 Surya Gana partition")
 
-    # Prasa Analysis
+    # Prasa Analysis with enhanced diagnostics
     lines.append("\n--- PRASA (ప్రాస) ANALYSIS ---")
     if analysis["prasa"]:
         prasa = analysis["prasa"]
@@ -577,25 +1416,83 @@ def format_analysis_report(analysis: Dict) -> str:
         lines.append(f"Line 1 - 2nd Aksharam: '{prasa['line1_second_aksharam']}' (Consonant: {prasa['line1_consonant']})")
         lines.append(f"Line 2 - 2nd Aksharam: '{prasa['line2_second_aksharam']}' (Consonant: {prasa['line2_consonant']})")
         lines.append(f"Prasa Status: {status}")
+
+        # Show mismatch diagnostics if prasa doesn't match
+        if not prasa["match"] and prasa.get("mismatch_details"):
+            details = prasa["mismatch_details"]
+            lines.append("\n  📋 Mismatch Details:")
+            if details.get("line1_full_breakdown"):
+                bd1 = details["line1_full_breakdown"]
+                lines.append(f"    Line 1: '{bd1.get('aksharam')}' → consonant '{bd1.get('consonant')}' ({bd1.get('consonant_varga', 'unknown')})")
+            if details.get("line2_full_breakdown"):
+                bd2 = details["line2_full_breakdown"]
+                lines.append(f"    Line 2: '{bd2.get('aksharam')}' → consonant '{bd2.get('consonant')}' ({bd2.get('consonant_varga', 'unknown')})")
+            if details.get("why_mismatch"):
+                lines.append(f"    Why: {details['why_mismatch']}")
+            if details.get("suggestion"):
+                lines.append(f"    💡 Suggestion: {details['suggestion']}")
     else:
         lines.append("Could not determine Prasa")
 
-    # Yati Analysis
+    # Yati Analysis with enhanced diagnostics
     lines.append("\n--- YATI (యతి) ANALYSIS ---")
 
     if analysis["yati_line1"]:
         yati1 = analysis["yati_line1"]
-        status = "✓ MATCH" if yati1["match"] else "✗ NO MATCH"
-        lines.append(f"Line 1: 1st Gana starts with '{yati1['first_gana_letter']}', 3rd Gana starts with '{yati1['third_gana_letter']}' - {status}")
+        match_type = yati1.get("match_type", "unknown")
+        quality = yati1.get("quality_score", 0)
+        status = f"✓ MATCH ({match_type}, {quality:.0f}%)" if yati1["match"] else "✗ NO MATCH"
+        lines.append(f"Line 1: '{yati1['first_gana_letter']}' (1st gana) ↔ '{yati1['third_gana_letter']}' (3rd gana) - {status}")
+
+        # Show details for mismatches or varga matches
+        if not yati1["match"] or match_type == "varga_match":
+            mismatch = yati1.get("mismatch_details", {})
+            if mismatch:
+                info1 = mismatch.get("letter1_info", {})
+                info2 = mismatch.get("letter2_info", {})
+                if info1 and info2:
+                    lines.append(f"    '{yati1['first_gana_letter']}' groups: {info1.get('yati_group_members', [])}")
+                if mismatch.get("matching_group_members"):
+                    lines.append(f"    Matching group: {mismatch['matching_group_members']}")
     else:
         lines.append("Line 1: Could not determine Yati")
 
     if analysis["yati_line2"]:
         yati2 = analysis["yati_line2"]
-        status = "✓ MATCH" if yati2["match"] else "✗ NO MATCH"
-        lines.append(f"Line 2: 1st Gana starts with '{yati2['first_gana_letter']}', 3rd Gana starts with '{yati2['third_gana_letter']}' - {status}")
+        match_type = yati2.get("match_type", "unknown")
+        quality = yati2.get("quality_score", 0)
+        status = f"✓ MATCH ({match_type}, {quality:.0f}%)" if yati2["match"] else "✗ NO MATCH"
+        lines.append(f"Line 2: '{yati2['first_gana_letter']}' (1st gana) ↔ '{yati2['third_gana_letter']}' (3rd gana) - {status}")
+
+        if not yati2["match"] or match_type == "varga_match":
+            mismatch = yati2.get("mismatch_details", {})
+            if mismatch:
+                info1 = mismatch.get("letter1_info", {})
+                if info1:
+                    lines.append(f"    '{yati2['first_gana_letter']}' groups: {info1.get('yati_group_members', [])}")
+                if mismatch.get("matching_group_members"):
+                    lines.append(f"    Matching group: {mismatch['matching_group_members']}")
     else:
         lines.append("Line 2: Could not determine Yati")
+
+    # Score Breakdown (NEW)
+    if "match_score" in analysis:
+        lines.append("\n--- SCORE BREAKDOWN ---")
+        score = analysis["match_score"]
+        breakdown = score.get("breakdown", {})
+        weights = score.get("weights", {})
+
+        lines.append(f"  Gana (weight {weights.get('gana', 0.4)*100:.0f}%):")
+        lines.append(f"    Line 1: {breakdown.get('gana_line1', 0):.1f}%")
+        lines.append(f"    Line 2: {breakdown.get('gana_line2', 0):.1f}%")
+        lines.append(f"    Average: {breakdown.get('gana_average', 0):.1f}%")
+
+        lines.append(f"  Prasa (weight {weights.get('prasa', 0.35)*100:.0f}%): {breakdown.get('prasa', 0):.1f}%")
+
+        lines.append(f"  Yati (weight {weights.get('yati', 0.25)*100:.0f}%):")
+        lines.append(f"    Line 1: {breakdown.get('yati_line1', 0):.1f}%")
+        lines.append(f"    Line 2: {breakdown.get('yati_line2', 0):.1f}%")
+        lines.append(f"    Average: {breakdown.get('yati_average', 0):.1f}%")
 
     # Summary
     lines.append("\n" + "=" * 70)
@@ -608,7 +1505,13 @@ def format_analysis_report(analysis: Dict) -> str:
     lines.append(f"Yati Line 1: {'✓ Match' if summary['yati_line1_match'] else '✗ No Match' if summary['yati_line1_match'] is False else 'N/A'}")
     lines.append(f"Yati Line 2: {'✓ Match' if summary['yati_line2_match'] else '✗ No Match' if summary['yati_line2_match'] is False else 'N/A'}")
     lines.append("")
-    lines.append(f"OVERALL: {'✓ VALID DWIPADA' if analysis['is_valid_dwipada'] else '✗ INVALID DWIPADA'}")
+
+    # Final verdict with percentage
+    if "match_score" in analysis:
+        overall = analysis["match_score"].get("overall", 0)
+        lines.append(f"OVERALL: {'✓ VALID DWIPADA' if analysis['is_valid_dwipada'] else '✗ INVALID DWIPADA'} ({overall:.1f}% match)")
+    else:
+        lines.append(f"OVERALL: {'✓ VALID DWIPADA' if analysis['is_valid_dwipada'] else '✗ INVALID DWIPADA'}")
     lines.append("=" * 70)
 
     return "\n".join(lines)
@@ -1062,11 +1965,12 @@ def run_tests():
     ]
     all_correct = True
     for l1, l2, expected, desc in test_pairs:
-        match, group = check_yati_maitri(l1, l2)
+        match, group, details = check_yati_maitri(l1, l2)
         result = "✓" if match == expected else "✗"
         if match != expected:
             all_correct = False
-        print(f"  {result} '{l1}' + '{l2}' ({desc}): {match}")
+        quality = details.get("quality_score", 0)
+        print(f"  {result} '{l1}' + '{l2}' ({desc}): {match} (quality: {quality:.0f}%)")
     if all_correct:
         passed += 1
         print("✓ PASSED - Yati Maitri varga matching works")
@@ -1080,7 +1984,7 @@ def run_tests():
     all_match = True
     for i, l1 in enumerate(k_varga):
         for l2 in k_varga[i+1:]:
-            match, _ = check_yati_maitri(l1, l2)
+            match, _, _ = check_yati_maitri(l1, l2)
             if not match:
                 all_match = False
                 print(f"  ✗ '{l1}' + '{l2}': NO MATCH (should match)")
@@ -1101,7 +2005,7 @@ def run_tests():
     ]
     all_correct = True
     for l1, l2, expected, desc in different_varga_pairs:
-        match, group = check_yati_maitri(l1, l2)
+        match, group, _ = check_yati_maitri(l1, l2)
         result = "✓" if match == expected else "✗"
         if match != expected:
             all_correct = False
@@ -1264,6 +2168,42 @@ def run_tests():
     else:
         failed += 1
         print("✗ FAILED - Should have returned error for short lines")
+
+    # =========================================================================
+    # CATEGORY 8: USER-PROVIDED TEST CASES (Tests 34+)
+    # =========================================================================
+    print("\n" + "=" * 70)
+    print("CATEGORY 8: USER-PROVIDED TEST CASES")
+    print("=" * 70)
+
+    # Test 34: Valid Dwipada - తోడుగా నిలిచేను (User-provided)
+    print("\n--- TEST 34: VALID - తోడుగా నిలిచేను (User-provided) ---")
+    poem34 = """తోడుగా నిలిచేను తుదిదాక చూడు
+నీడలా సాగేను నిమిషంబు విడువ"""
+    try:
+        analysis = analyze_dwipada(poem34)
+        print(f"  Line 1: {analysis['pada1']['line']}")
+        print(f"  Line 2: {analysis['pada2']['line']}")
+        print(f"  Gana Seq Line1: {analysis['pada1']['is_valid_gana_sequence']}")
+        print(f"  Gana Seq Line2: {analysis['pada2']['is_valid_gana_sequence']}")
+        if analysis['prasa']:
+            print(f"  Prasa: '{analysis['prasa']['line1_consonant']}' vs '{analysis['prasa']['line2_consonant']}' = {analysis['prasa']['match']}")
+        if analysis['yati_line1']:
+            print(f"  Yati Line1: '{analysis['yati_line1']['first_gana_letter']}' ↔ '{analysis['yati_line1']['third_gana_letter']}' = {analysis['yati_line1']['match']}")
+        if analysis['yati_line2']:
+            print(f"  Yati Line2: '{analysis['yati_line2']['first_gana_letter']}' ↔ '{analysis['yati_line2']['third_gana_letter']}' = {analysis['yati_line2']['match']}")
+        if 'match_score' in analysis:
+            print(f"  Overall Score: {analysis['match_score']['overall']}%")
+        print(f"  Valid Dwipada: {analysis['is_valid_dwipada']}")
+        if analysis['is_valid_dwipada']:
+            passed += 1
+            print("✓ PASSED - Valid Dwipada correctly identified")
+        else:
+            failed += 1
+            print("✗ FAILED - Should be a valid Dwipada")
+    except Exception as e:
+        print(f"✗ FAILED - {e}")
+        failed += 1
 
     # =========================================================================
     # TEST SUMMARY
