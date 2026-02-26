@@ -124,6 +124,42 @@ YATI_MAITRI_GROUPS = [
     {"మ", "పు", "ఫు", "బు", "భు", "ము"},
 ]
 
+# Svara Yati Groups (స్వర యతి) — Vowel family harmony
+# Vowels in the same group can satisfy Yati regardless of consonants.
+# Uses independent vowel forms; dependent vowels are mapped via dependent_to_independent.
+SVARA_YATI_GROUPS = [
+    {"అ", "ఆ", "ఐ", "ఔ"},
+    {"ఇ", "ఈ", "ఎ", "ఏ", "ఋ", "ౠ"},
+    {"ఉ", "ఊ", "ఒ", "ఓ"},
+]
+
+# Bindu Yati (బిందు యతి) — Varga-to-Nasal mapping
+# When a syllable has anusvara (ం), it can match the nasal of its consonant's varga.
+VARGA_NASALS = {
+    "క": "ఙ", "ఖ": "ఙ", "గ": "ఙ", "ఘ": "ఙ",
+    "చ": "ఞ", "ఛ": "ఞ", "జ": "ఞ", "ఝ": "ఞ",
+    "ట": "ణ", "ఠ": "ణ", "డ": "ణ", "ఢ": "ణ",
+    "త": "న", "థ": "న", "ద": "న", "ధ": "న",
+    "ప": "మ", "ఫ": "మ", "బ": "మ", "భ": "మ",
+}
+NASAL_TO_VARGA = {
+    "ఙ": {"క", "ఖ", "గ", "ఘ"},
+    "ఞ": {"చ", "ఛ", "జ", "ఝ"},
+    "ణ": {"ట", "ఠ", "డ", "ఢ"},
+    "న": {"త", "థ", "ద", "ధ"},
+    "మ": {"ప", "ఫ", "బ", "భ"},
+}
+
+# Prasa Equivalency Groups (ప్రాస సమానాక్షరములు)
+# These consonant pairs are traditionally treated as equivalent for Prasa matching.
+# The equivalency applies regardless of gudinthams (vowel marks) or vattulu (conjuncts)
+# because get_base_consonant() extracts only the first consonant before comparison.
+PRASA_EQUIVALENTS = [
+    {"ల", "ళ"},
+    {"శ", "స"},
+    {"ఱ", "ర"},
+]
+
 # =============================================================================
 # CONSONANT CLASSIFICATION (వర్ణమాల విభజన)
 # =============================================================================
@@ -170,7 +206,7 @@ SCORE_PER_VALID_GANA = 25.0           # Each valid gana contributes 25% (100% / 
 
 # Yati quality scores - measures how well the alliteration rule is satisfied
 YATI_EXACT_MATCH_SCORE = 100.0        # Same letter (e.g., స ↔ స)
-YATI_VARGA_MATCH_SCORE = 70.0         # Same phonetic group (e.g., క ↔ గ)
+YATI_VARGA_MATCH_SCORE = 100.0        # Same phonetic group (e.g., క ↔ గ) — treated as equivalent
 YATI_NO_MATCH_SCORE = 0.0             # Different groups (e.g., క ↔ చ)
 
 # Prasa scores - binary match for rhyme rule
@@ -469,9 +505,8 @@ def calculate_yati_score(yati_result: Optional[Dict]) -> Dict:
     """
     Calculate the percentage score for yati (alliteration) matching.
 
-    Yati scoring is nuanced:
-    - 100%: Exact letter match (same letter in 1st and 3rd gana positions)
-    - 70%: Same Yati Maitri varga (phonetically related letters)
+    Yati scoring:
+    - 100%: Exact letter match OR same Yati Maitri varga (both treated as full match)
     - 0%: Different vargas (no phonetic relationship)
 
     Args:
@@ -867,8 +902,10 @@ def akshara_ganavibhajana(aksharalu_list: List[str]) -> List[str]:
         Rule 2: Has diphthong - ై (ai) or ౌ (au)
         Rule 3: Has anusvara (ం) or visarga (ః)
         Rule 4: Ends with halant (్) - incomplete syllable
-        Rule 5: NEXT syllable starts with conjunct (C్C) or double consonant
-                → This makes the CURRENT syllable Guru (sandhi effect)
+        Rule 5: NEXT syllable (within same word) starts with conjunct (C్C)
+                or double consonant → makes CURRENT syllable Guru (sandhi effect)
+                NOTE: This rule does NOT cross word boundaries (spaces).
+                Compound words (samasam) written as one word are handled naturally.
 
     LAGHU RULES (లఘువు - light syllable):
     A syllable is Laghu (I) if NONE of the Guru rules apply.
@@ -937,9 +974,11 @@ def akshara_ganavibhajana(aksharalu_list: List[str]) -> List[str]:
         if ganam_markers[i] == "":
             continue
 
-        # Find next non-ignorable syllable
+        # Find next non-ignorable syllable — stop at word boundaries (spaces)
         next_syllable_index = -1
         for j in range(i + 1, len(aksharalu_list)):
+            if aksharalu_list[j] == ' ':
+                break  # Word boundary — conjunct rule does not cross words
             if aksharalu_list[j] not in ignorable_chars:
                 next_syllable_index = j
                 break
@@ -1000,6 +1039,127 @@ def get_first_letter(aksharam: str) -> Optional[str]:
     if not aksharam:
         return None
     return aksharam[0]
+
+
+def get_independent_vowel(aksharam: str) -> Optional[str]:
+    """
+    Extract the vowel of an aksharam as its independent vowel form.
+
+    Used for Svara Yati matching — compares vowel families regardless of consonants.
+    Dependent vowel signs (ా, ి, ు, etc.) are mapped to their independent forms (ఆ, ఇ, ఉ, etc.).
+    If no explicit vowel marker, returns "అ" (implicit inherent vowel).
+
+    Examples:
+        >>> get_independent_vowel("కా")   # dependent ా → ఆ
+        "ఆ"
+        >>> get_independent_vowel("అ")    # independent vowel
+        "అ"
+        >>> get_independent_vowel("క")    # no vowel marker → implicit అ
+        "అ"
+    """
+    if not aksharam:
+        return None
+    for dv in dependent_vowels:
+        if dv in aksharam:
+            return dependent_to_independent[dv]
+    if aksharam[0] in independent_vowels:
+        return aksharam[0]
+    return "అ"
+
+
+def get_all_consonants(aksharam: str) -> List[str]:
+    """
+    Extract all consonants from an aksharam (for Samyukta Yati).
+
+    For conjunct aksharalu like "ప్ర", returns all consonant components.
+    For simple aksharalu like "క", returns just that consonant.
+
+    Examples:
+        >>> get_all_consonants("ప్ర")
+        ["ప", "ర"]
+        >>> get_all_consonants("క్షా")
+        ["క", "ష"]
+        >>> get_all_consonants("అ")
+        []
+    """
+    consonants = []
+    for ch in aksharam:
+        if ch in telugu_consonants:
+            consonants.append(ch)
+    return consonants
+
+
+def check_svara_yati(aksharam1: str, aksharam2: str) -> bool:
+    """
+    Check Svara Yati (స్వర యతి) — vowel family match between two aksharalu.
+
+    Svara Yati is satisfied when the vowels of both aksharalu belong to the same
+    vowel family, regardless of the consonants. E.g., "కా" (vowel ఆ) matches
+    "అన" (vowel అ) because ఆ and అ are in the same family.
+    """
+    v1 = get_independent_vowel(aksharam1)
+    v2 = get_independent_vowel(aksharam2)
+    if not v1 or not v2:
+        return False
+    if v1 == v2:
+        return True
+    for group in SVARA_YATI_GROUPS:
+        if v1 in group and v2 in group:
+            return True
+    return False
+
+
+def check_samyukta_yati(aksharam1: str, aksharam2: str) -> bool:
+    """
+    Check Samyukta Yati (సంయుక్త యతి) — conjunct consonant harmony.
+
+    When either aksharam is a conjunct (e.g., "ప్ర"), any consonant within the
+    conjunct cluster can satisfy yati. The match uses YATI_MAITRI_GROUPS for
+    varga equivalence. E.g., "ప్ర" can match with "ర"-varga or "ప"-varga.
+    """
+    consonants1 = get_all_consonants(aksharam1)
+    consonants2 = get_all_consonants(aksharam2)
+    if not consonants1 or not consonants2:
+        return False
+    for c1 in consonants1:
+        for c2 in consonants2:
+            if c1 == c2:
+                return True
+            for group in YATI_MAITRI_GROUPS:
+                if c1 in group and c2 in group:
+                    return True
+    return False
+
+
+def check_bindu_yati(aksharam1: str, aksharam2: str) -> bool:
+    """
+    Check Bindu Yati (బిందు యతి) — anusvara syllable matches its varga nasal.
+
+    When a syllable contains anusvara (ం), it can form a valid yati match with
+    the nasal consonant of its varga. E.g., "కం" can match "ఙ" (K-varga nasal),
+    "పం" can match "మ" (P-varga nasal).
+    """
+    anusvara = "ం"
+    for a_with, a_other in [(aksharam1, aksharam2), (aksharam2, aksharam1)]:
+        if anusvara not in a_with:
+            continue
+        base = get_base_consonant(a_with)
+        if not base or base not in VARGA_NASALS:
+            continue
+        other_consonant = get_base_consonant(a_other)
+        if not other_consonant:
+            # Other starts with a vowel — check if it's the nasal as first letter
+            if a_other and a_other[0] == VARGA_NASALS[base]:
+                return True
+            continue
+        varga_nasal = VARGA_NASALS[base]
+        if other_consonant == varga_nasal:
+            return True
+        # Reverse: if other is a nasal, check if base is in its varga
+        if other_consonant in NASAL_TO_VARGA:
+            if base in NASAL_TO_VARGA[other_consonant]:
+                return True
+    return False
 
 
 def check_yati_maitri(letter1: str, letter2: str) -> Tuple[bool, Optional[int], Dict]:
@@ -1089,6 +1249,21 @@ def check_yati_maitri_simple(letter1: str, letter2: str) -> Tuple[bool, Optional
     return is_match, group_idx
 
 
+def are_prasa_equivalent(c1: str, c2: str) -> bool:
+    """
+    Check if two consonants are equivalent for Prasa matching.
+
+    Returns True if consonants are identical or belong to the same
+    PRASA_EQUIVALENTS group (e.g., ల↔ళ, శ↔స, ఱ↔ర).
+    """
+    if c1 == c2:
+        return True
+    for group in PRASA_EQUIVALENTS:
+        if c1 in group and c2 in group:
+            return True
+    return False
+
+
 def check_prasa(line1: str, line2: str) -> Tuple[bool, Dict]:
     """
     Check Prasa (rhyme) between two lines.
@@ -1139,8 +1314,8 @@ def check_prasa(line1: str, line2: str) -> Tuple[bool, Dict]:
     consonant1 = get_base_consonant(second_ak1)
     consonant2 = get_base_consonant(second_ak2)
 
-    # Compare consonants
-    is_match = consonant1 == consonant2 if consonant1 and consonant2 else False
+    # Compare consonants (exact match or prasa equivalency like ల↔ళ, శ↔స, ఱ↔ర)
+    is_match = are_prasa_equivalent(consonant1, consonant2) if consonant1 and consonant2 else False
 
     # Build result dictionary
     result = {
@@ -1230,7 +1405,7 @@ def check_prasa_aksharalu(aksharam1: str, aksharam2: str) -> Tuple[bool, Dict]:
     consonant1 = get_base_consonant(aksharam1)
     consonant2 = get_base_consonant(aksharam2)
 
-    is_match = consonant1 == consonant2 if consonant1 and consonant2 else False
+    is_match = are_prasa_equivalent(consonant1, consonant2) if consonant1 and consonant2 else False
 
     return is_match, {
         "aksharam1": aksharam1,
@@ -1462,12 +1637,14 @@ def analyze_pada(line: str) -> Dict:
     first_aksharam = pure_aksharalu[0] if len(pure_aksharalu) > 0 else None
     second_aksharam = pure_aksharalu[1] if len(pure_aksharalu) > 1 else None
 
-    # Get first letter of 3rd Gana for Yati check
+    # Get first letter/aksharam of 3rd Gana for Yati check
     third_gana_first_letter = None
+    third_gana_first_aksharam = None
     if partition and len(partition["ganas"]) >= 3:
         third_gana_aksharalu = partition["ganas"][2]["aksharalu"]
         if third_gana_aksharalu:
             third_gana_first_letter = get_first_letter(third_gana_aksharalu[0])
+            third_gana_first_aksharam = third_gana_aksharalu[0]
 
     return {
         "line": line,
@@ -1480,6 +1657,7 @@ def analyze_pada(line: str) -> Dict:
         "first_letter": get_first_letter(first_aksharam) if first_aksharam else None,
         "second_consonant": get_base_consonant(second_aksharam) if second_aksharam else None,
         "third_gana_first_letter": third_gana_first_letter,
+        "third_gana_first_aksharam": third_gana_first_aksharam,
         "is_valid_gana_sequence": partition is not None
     }
 
@@ -1537,13 +1715,29 @@ def analyze_dwipada(poem: str) -> Dict:
             pada1["first_letter"],
             pada1["third_gana_first_letter"]
         )
+        match_type = yati_details1.get("match_type", "no_match")
+
+        # If Vyanjana Yati failed, try Svara Yati and Samyukta Yati
+        aksharam1 = pada1["first_aksharam"]
+        aksharam3 = pada1["third_gana_first_aksharam"]
+        if not match and aksharam1 and aksharam3:
+            if check_svara_yati(aksharam1, aksharam3):
+                match = True
+                match_type = "svara_yati"
+            elif check_samyukta_yati(aksharam1, aksharam3):
+                match = True
+                match_type = "samyukta_yati"
+            elif check_bindu_yati(aksharam1, aksharam3):
+                match = True
+                match_type = "bindu_yati"
+
         yati_line1 = {
             "first_gana_letter": pada1["first_letter"],
             "third_gana_letter": pada1["third_gana_first_letter"],
             "match": match,
             "group_index": group_idx,
-            "quality_score": yati_details1.get("quality_score", 0.0),
-            "match_type": yati_details1.get("match_type", "no_match"),
+            "quality_score": YATI_EXACT_MATCH_SCORE if match else YATI_NO_MATCH_SCORE,
+            "match_type": match_type,
             "mismatch_details": yati_details1,
         }
 
@@ -1552,13 +1746,29 @@ def analyze_dwipada(poem: str) -> Dict:
             pada2["first_letter"],
             pada2["third_gana_first_letter"]
         )
+        match_type = yati_details2.get("match_type", "no_match")
+
+        # If Vyanjana Yati failed, try Svara Yati and Samyukta Yati
+        aksharam1 = pada2["first_aksharam"]
+        aksharam3 = pada2["third_gana_first_aksharam"]
+        if not match and aksharam1 and aksharam3:
+            if check_svara_yati(aksharam1, aksharam3):
+                match = True
+                match_type = "svara_yati"
+            elif check_samyukta_yati(aksharam1, aksharam3):
+                match = True
+                match_type = "samyukta_yati"
+            elif check_bindu_yati(aksharam1, aksharam3):
+                match = True
+                match_type = "bindu_yati"
+
         yati_line2 = {
             "first_gana_letter": pada2["first_letter"],
             "third_gana_letter": pada2["third_gana_first_letter"],
             "match": match,
             "group_index": group_idx,
-            "quality_score": yati_details2.get("quality_score", 0.0),
-            "match_type": yati_details2.get("match_type", "no_match"),
+            "quality_score": YATI_EXACT_MATCH_SCORE if match else YATI_NO_MATCH_SCORE,
+            "match_type": match_type,
             "mismatch_details": yati_details2,
         }
 

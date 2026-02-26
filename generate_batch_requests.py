@@ -41,30 +41,27 @@ DOT_PATTERN = re.compile(r"…|\.{4,}")
 # FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def extract_couplets(filepath: Path) -> Tuple[List[Tuple[str, str]], int, int]:
+def extract_couplets(filepath: Path) -> Tuple[List[Tuple[str, str]], int, int, int]:
     """
     Extract dwipada couplets from a single text file.
 
-    Filtering pipeline:
-        1. Stop at '---' (footnotes section)
-        2. Remove lines starting with '#' (metadata/comments)
-        3. Remove blank lines
-        4. Strip [annotation] brackets from remaining lines
-        5. Pair lines sequentially into couplets
-        6. Discard couplets where either line has dots/ellipsis
-        7. Discard orphan last line if odd count
-
-    Args:
-        filepath: Path to the .txt file
+    Uses blank lines as couplet boundaries:
+        - 2 lines between blanks → 1 couplet
+        - 3 lines between blanks → 2 overlapping couplets: (1,2) and (2,3)
+        - 1 line (singleton) → skipped
+        - Lines with dots/ellipsis → couplet discarded
+        - Lines starting with '#' → ignored (heading boundary)
 
     Returns:
-        Tuple of (couplets_list, orphan_count, dot_discarded_count)
+        Tuple of (couplets_list, singleton_count, dot_discarded_count, triplet_count)
     """
     with open(filepath, "r", encoding="utf-8") as f:
         raw_lines = f.readlines()
 
-    # Step 1-3: Filter lines (stop at footnotes, skip # and blanks)
-    clean_lines = []
+    # Build groups of consecutive verse lines, split by blank lines and # headings
+    groups = []
+    current_group = []
+
     for line in raw_lines:
         stripped = line.strip()
 
@@ -72,31 +69,56 @@ def extract_couplets(filepath: Path) -> Tuple[List[Tuple[str, str]], int, int]:
         if stripped == "---":
             break
 
-        # Skip comments and blank lines
-        if stripped.startswith("#") or not stripped:
+        # Blank lines and # headings end the current group
+        if not stripped or stripped.startswith("#"):
+            if current_group:
+                groups.append(current_group)
+                current_group = []
             continue
 
-        # Step 4: Strip editorial annotations
+        # Strip editorial annotations
         cleaned = ANNOTATION_PATTERN.sub("", stripped).strip()
         if cleaned:
-            clean_lines.append(cleaned)
+            current_group.append(cleaned)
 
-    # Step 5: Pair sequentially
-    orphan_count = len(clean_lines) % 2
-    pairs = []
-    for i in range(0, len(clean_lines) - orphan_count, 2):
-        pairs.append((clean_lines[i], clean_lines[i + 1]))
+    # Flush last group
+    if current_group:
+        groups.append(current_group)
 
-    # Step 6: Discard couplets with dots/ellipsis in either line
-    dot_discarded = 0
+    # Process each group into couplets
     valid_couplets = []
-    for line1, line2 in pairs:
-        if DOT_PATTERN.search(line1) or DOT_PATTERN.search(line2):
-            dot_discarded += 1
-        else:
-            valid_couplets.append((line1, line2))
+    singleton_count = 0
+    dot_discarded = 0
+    triplet_count = 0
 
-    return valid_couplets, orphan_count, dot_discarded
+    for group in groups:
+        if len(group) == 1:
+            singleton_count += 1
+        elif len(group) == 2:
+            line1, line2 = group
+            if DOT_PATTERN.search(line1) or DOT_PATTERN.search(line2):
+                dot_discarded += 1
+            else:
+                valid_couplets.append((line1, line2))
+        elif len(group) == 3:
+            triplet_count += 1
+            # Overlapping couplets: (1,2) and (2,3)
+            for i in range(2):
+                l1, l2 = group[i], group[i + 1]
+                if DOT_PATTERN.search(l1) or DOT_PATTERN.search(l2):
+                    dot_discarded += 1
+                else:
+                    valid_couplets.append((l1, l2))
+        else:
+            # 4+ lines: use same overlapping sliding window
+            for i in range(len(group) - 1):
+                l1, l2 = group[i], group[i + 1]
+                if DOT_PATTERN.search(l1) or DOT_PATTERN.search(l2):
+                    dot_discarded += 1
+                else:
+                    valid_couplets.append((l1, l2))
+
+    return valid_couplets, singleton_count, dot_discarded, triplet_count
 
 
 def build_request(line1: str, line2: str, source_file: str, work: str, couplet_num: int) -> dict:
@@ -158,14 +180,13 @@ def main():
 
     # Process all files
     total_couplets = 0
-    total_orphans = 0
+    total_singletons = 0
     total_dot_discarded = 0
-    files_with_orphans = 0
-    files_with_dots = 0
+    total_triplets = 0
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as out_f:
         for filepath in txt_files:
-            couplets, orphans, dot_discarded = extract_couplets(filepath)
+            couplets, singletons, dot_discarded, triplets = extract_couplets(filepath)
             work = get_work_name(filepath, DATA_DIR)
             source = str(filepath)
 
@@ -174,12 +195,9 @@ def main():
                 out_f.write(json.dumps(request, ensure_ascii=False) + "\n")
 
             total_couplets += len(couplets)
-            total_orphans += orphans
+            total_singletons += singletons
             total_dot_discarded += dot_discarded
-            if orphans:
-                files_with_orphans += 1
-            if dot_discarded:
-                files_with_dots += 1
+            total_triplets += triplets
 
     # Summary
     print(f"\n{'=' * 60}")
@@ -187,8 +205,9 @@ def main():
     print(f"{'=' * 60}")
     print(f"  Files processed:        {len(txt_files)}")
     print(f"  Couplets written:       {total_couplets}")
-    print(f"  Couplets discarded (…): {total_dot_discarded} (from {files_with_dots} files)")
-    print(f"  Orphan lines skipped:   {total_orphans} (from {files_with_orphans} files)")
+    print(f"  Couplets discarded (…): {total_dot_discarded}")
+    print(f"  Singletons skipped:     {total_singletons}")
+    print(f"  Triplets expanded:      {total_triplets}")
     print(f"  Output file:            {OUTPUT_FILE}")
     print(f"{'=' * 60}")
 
