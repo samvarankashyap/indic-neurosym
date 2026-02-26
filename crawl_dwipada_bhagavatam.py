@@ -2,21 +2,16 @@
 """
 Crawler for Dwipada Bhagavatam from Telugu Wikisource (te.wikisource.org)
 
-Downloads all 206 chapters across 3 kandas and saves them as organized .txt files.
-
-Key differences from Ranganatha Ramayanam crawler:
-- All chapters are on single kanda pages (only 3 pages to fetch)
-- Content is in <div class="poem"> sections
-- Requires SSL verification disabled (cert issue with Wikisource)
+Downloads all chapters across 3 kandas, formats verses as couplets,
+and saves one file per kanda.
 """
 
 import os
 import re
 import requests
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import List, Tuple, Optional
-from urllib.parse import quote
 import warnings
 
 # Suppress SSL warnings
@@ -26,12 +21,27 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 BASE_URL = "https://te.wikisource.org/wiki/ద్విపదభాగవతము/"
 
 KANDAS = [
-    {"name": "MadhuraKanda", "telugu": "మధురాకాండము", "url_slug": "మధురాకాండము", "folder": "01_MadhuraKanda"},
-    {"name": "KalyanaKanda", "telugu": "కల్యాణకాండము", "url_slug": "కల్యాణకాండము", "folder": "02_KalyanaKanda"},
-    {"name": "JagadabhirakshaKanda", "telugu": "జగదభిరక్షకాండము", "url_slug": "జగదభిరక్షకాండము", "folder": "03_JagadabhirakshaKanda"},
+    {
+        "name": "MadhuraKanda",
+        "telugu": "మధురాకాండము",
+        "url_slug": "మధురాకాండము",
+        "filename": "1_madhurakanda.txt",
+    },
+    {
+        "name": "KalyanaKanda",
+        "telugu": "కల్యాణకాండము",
+        "url_slug": "కల్యాణకాండము",
+        "filename": "1_kalyanakanda.txt",
+    },
+    {
+        "name": "JagadabhirakshaKanda",
+        "telugu": "జగదభిరక్షకాండము",
+        "url_slug": "జగదభిరక్షకాండము",
+        "filename": "1_jagadabhirakshakanda.txt",
+    },
 ]
 
-OUTPUT_DIR = Path(__file__).parent / "data" / "dwipada_bhagavatam"
+OUTPUT_DIR = Path(__file__).parent / "data" / "dwipada_bhagavatam2"
 
 # Request settings
 TIMEOUT = 60
@@ -52,95 +62,71 @@ def fetch_page(url: str) -> Optional[str]:
         return None
 
 
-def extract_footnotes(soup: BeautifulSoup) -> List[Tuple[str, str]]:
-    """Extract footnotes from the page.
+def clean_verse_line(line: str) -> Optional[str]:
+    """Clean a single verse line.
 
-    Returns:
-        List of (marker, text) tuples
+    Returns None if the line should be skipped (ellipsis-only, empty, etc).
     """
-    footnotes = []
+    line = line.strip()
+    if not line:
+        return None
 
-    # Find footnote references at bottom of page
-    for cite in soup.find_all('li', id=re.compile(r'^cite_note-')):
-        cite_id = cite.get('id', '')
-        match = re.search(r'cite_note-(\d+)', cite_id)
-        if match:
-            marker = match.group(1)
-            text = cite.get_text(strip=True)
-            # Remove the "↑" back-reference
-            text = re.sub(r'^↑\s*', '', text)
-            if text:
-                footnotes.append((marker, text))
+    # Skip ellipsis-only lines
+    if re.match(r'^[\.…\s]+$', line):
+        return None
 
-    return footnotes
+    # Remove footnote markers like [1], [2]
+    line = re.sub(r'\[\d+\]', '', line)
 
+    # Remove parentheses but keep the text inside: (text) -> text
+    line = re.sub(r'\(([^)]*)\)', r'\1', line)
+    # Remove any remaining unmatched parens
+    line = line.replace('(', '').replace(')', '')
+    # Remove quotation marks, exclamation marks, semicolons, commas
+    line = re.sub(r'["""\u201c\u201d!;,]', '', line)
 
-def clean_text(text: str) -> str:
-    """Clean extracted text by removing extra whitespace."""
-    # Remove multiple consecutive newlines (keep max 2)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    # Remove leading/trailing whitespace from each line
-    lines = [line.strip() for line in text.split('\n')]
-    # Remove empty lines at start and end
-    while lines and not lines[0]:
-        lines.pop(0)
-    while lines and not lines[-1]:
-        lines.pop()
-    return '\n'.join(lines)
+    # Remove trailing page numbers (e.g. "text 10", "text;20")
+    # These are page markers from the print edition, typically multiples of 10
+    line = re.sub(r'\d{1,3}\s*$', '', line)
+
+    # Clean up extra spaces
+    line = re.sub(r'\s+', ' ', line).strip()
+
+    if not line:
+        return None
+
+    return line
 
 
-def extract_chapter_content(chapter_soup: BeautifulSoup) -> str:
-    """Extract clean text content from a chapter's HTML."""
-    # Work on a copy to avoid modifying original
-    soup = BeautifulSoup(str(chapter_soup), 'lxml')
+def format_couplets(lines: List[str]) -> str:
+    """Format verse lines as couplets (pairs of 2 lines with blank line between)."""
+    # Clean all lines, filtering out None
+    cleaned = []
+    for line in lines:
+        result = clean_verse_line(line)
+        if result:
+            cleaned.append(result)
 
-    # Remove page number markers
-    for pagenum in soup.find_all('span', class_='pagenum'):
-        pagenum.decompose()
+    if not cleaned:
+        return ""
 
-    # Remove footnote superscripts
-    for sup in soup.find_all('sup', class_='reference'):
-        sup.decompose()
+    # Group into pairs (couplets)
+    couplets = []
+    for i in range(0, len(cleaned), 2):
+        if i + 1 < len(cleaned):
+            couplets.append(f"{cleaned[i]}\n{cleaned[i+1]}")
+        else:
+            # Odd line at the end - include it standalone
+            couplets.append(cleaned[i])
 
-    # Remove ws-noexport elements (navigation, metadata)
-    for noexport in soup.find_all(class_='ws-noexport'):
-        noexport.decompose()
-
-    # Find poem divs and extract text
-    poems = soup.find_all('div', class_='poem')
-
-    if poems:
-        lines = []
-        for poem in poems:
-            # Replace <br> with newlines
-            for br in poem.find_all('br'):
-                br.replace_with('\n')
-
-            # Get text
-            poem_text = poem.get_text()
-            lines.append(poem_text)
-
-        text = '\n'.join(lines)
-    else:
-        # Fallback: get all text
-        for br in soup.find_all('br'):
-            br.replace_with('\n')
-        text = soup.get_text()
-
-    # Clean up
-    text = clean_text(text)
-
-    # Remove line numbers like "10", "20" etc. at end of lines
-    text = re.sub(r'\s+\d+\s*$', '', text, flags=re.MULTILINE)
-
-    return text
+    return "\n\n".join(couplets)
 
 
 def parse_kanda_page(html: str) -> List[Tuple[str, str]]:
-    """Parse a kanda page and extract all chapters.
+    """Parse a kanda page and extract headings and verse blocks.
 
     Returns:
-        List of (title, content) tuples
+        List of (type, text) tuples where type is "heading" or "verses"
     """
     soup = BeautifulSoup(html, 'lxml')
 
@@ -153,114 +139,112 @@ def parse_kanda_page(html: str) -> List[Tuple[str, str]]:
         print("  WARNING: Could not find main content div")
         return []
 
-    # Find all chapter headings
-    # Pattern: <div class="tiInherit" style="text-align:center;"><p><b>Chapter Title</b>
-    chapter_headings = []
+    # Remove page number markers
+    for pagenum in content_div.find_all('span', class_='pagenum'):
+        pagenum.decompose()
 
-    for div in content_div.find_all('div', class_='tiInherit'):
-        style = div.get('style', '')
-        if 'text-align:center' in style or 'text-align: center' in style:
-            # Look for bold text (chapter title)
-            bold = div.find('b')
+    # Remove footnote superscripts
+    for sup in content_div.find_all('sup', class_='reference'):
+        sup.decompose()
+
+    # Remove ws-noexport elements
+    for noexport in content_div.find_all(class_='ws-noexport'):
+        noexport.decompose()
+
+    result = []
+
+    # Process poem divs - they contain both headings and verses
+    poems = content_div.find_all('div', class_='poem')
+
+    for poem in poems:
+        # Check for embedded heading(s) inside the poem
+        headings_in_poem = poem.find_all('div', class_='tiInherit')
+
+        if not headings_in_poem:
+            # No headings - the whole poem is verse content
+            for br in poem.find_all('br'):
+                br.replace_with('\n')
+            text = poem.get_text()
+            lines = [l for l in text.split('\n') if l.strip()]
+            if lines:
+                result.append(("verses", lines))
+        else:
+            # Poem contains heading(s) - need to separate heading from verses
+            # Process the poem's HTML content in order
+            _extract_from_poem_with_headings(poem, result)
+
+    # Also check for standalone tiInherit divs (not inside poems)
+    # These are already handled since they appear inside poem divs in this source
+
+    return result
+
+
+def _extract_from_poem_with_headings(poem, result: list):
+    """Extract headings and verses from a poem div that contains tiInherit headings."""
+    # Get all the text content, identifying heading positions
+    # Strategy: iterate through children of the poem
+
+    # First, replace <br> with newlines
+    for br in poem.find_all('br'):
+        br.replace_with('\n')
+
+    current_verses = []
+
+    for child in poem.children:
+        if hasattr(child, 'get') and child.get('class') and 'tiInherit' in child.get('class', []):
+            # This is a heading
+            # First, flush any accumulated verses
+            if current_verses:
+                result.append(("verses", current_verses))
+                current_verses = []
+
+            bold = child.find('b')
             if bold:
-                title = bold.get_text(strip=True)
-                # Skip kanda title headers
-                if 'కాండము' in title and len(title) < 30:
-                    continue
-                # Skip very short titles or navigation
-                if len(title) < 5:
-                    continue
-                chapter_headings.append((title, div))
+                heading_text = bold.get_text(strip=True)
+                # Skip the kanda title itself (e.g. "ద్విపదభాగవతము")
+                if heading_text and 'ద్విపదభాగవతము' not in heading_text:
+                    result.append(("heading", heading_text))
+        elif hasattr(child, 'get_text'):
+            text = child.get_text()
+            lines = [l for l in text.split('\n') if l.strip()]
+            current_verses.extend(lines)
+        elif isinstance(child, str):
+            text = child.strip()
+            if text:
+                lines = [l for l in text.split('\n') if l.strip()]
+                current_verses.extend(lines)
 
-    print(f"  Found {len(chapter_headings)} chapters")
-
-    # Extract content for each chapter
-    chapters = []
-
-    for i, (title, heading_div) in enumerate(chapter_headings):
-        # Find content between this heading and the next
-        content_elements = []
-        current = heading_div.next_sibling
-
-        # Get the next heading's div (or end of content)
-        next_heading_div = chapter_headings[i + 1][1] if i + 1 < len(chapter_headings) else None
-
-        while current:
-            if current == next_heading_div:
-                break
-
-            # Check if we've reached another centered heading div
-            if hasattr(current, 'get') and current.get('class'):
-                if 'tiInherit' in current.get('class', []):
-                    style = current.get('style', '')
-                    if 'text-align:center' in style or 'text-align: center' in style:
-                        bold = current.find('b') if hasattr(current, 'find') else None
-                        if bold:
-                            break
-
-            content_elements.append(current)
-            current = current.next_sibling
-
-        # Create a temporary soup with the content elements
-        temp_soup = BeautifulSoup('<div></div>', 'lxml')
-        container = temp_soup.find('div')
-
-        for elem in content_elements:
-            if isinstance(elem, NavigableString):
-                container.append(NavigableString(str(elem)))
-            elif hasattr(elem, 'name'):
-                container.append(BeautifulSoup(str(elem), 'lxml'))
-
-        # Extract text content
-        content = extract_chapter_content(container)
-
-        if content.strip():
-            chapters.append((title, content))
-
-    return chapters
+    # Flush remaining verses
+    if current_verses:
+        result.append(("verses", current_verses))
 
 
-def sanitize_filename(name: str) -> str:
-    """Sanitize a string for use as a filename."""
-    # Remove or replace invalid filename characters
-    invalid_chars = r'[<>:"/\\|?*]'
-    sanitized = re.sub(invalid_chars, '', name)
-    # Replace multiple spaces with single space
-    sanitized = re.sub(r'\s+', ' ', sanitized)
-    # Limit length
-    return sanitized[:50].strip() if len(sanitized) > 50 else sanitized.strip()
+def build_output(parsed: List[Tuple[str, str]]) -> str:
+    """Build the final output string from parsed headings and verse blocks."""
+    output_parts = []
+
+    for item_type, content in parsed:
+        if item_type == "heading":
+            # Clean punctuation from headings too
+            clean_heading = re.sub(r'["""\u201c\u201d!;,]', '', content).strip()
+            output_parts.append(f"\n# {clean_heading}\n")
+        elif item_type == "verses":
+            formatted = format_couplets(content)
+            if formatted:
+                output_parts.append(formatted)
+
+    # Join and clean up excessive blank lines
+    text = "\n".join(output_parts)
+    text = re.sub(r'\n{4,}', '\n\n\n', text)
+    return text.strip() + "\n"
 
 
-def format_output(kanda_telugu: str, chapter_num: int, title: str, content: str,
-                  footnotes: List[Tuple[str, str]] = None) -> str:
-    """Format the chapter content for saving to file."""
-    output = []
-    output.append(f"# కాండము: {kanda_telugu}")
-    output.append(f"# అధ్యాయము: {chapter_num:03d}")
-    output.append(f"# శీర్షిక: {title}")
-    output.append("")
-    output.append(content)
-
-    # Add footnotes if any
-    if footnotes:
-        output.append("")
-        output.append("---")
-        output.append("పాదసూచికలు (Footnotes):")
-        for marker, text in footnotes:
-            output.append(f"[{marker}] {text}")
-
-    return '\n'.join(output)
-
-
-def crawl_kanda(kanda: dict, output_dir: Path) -> int:
-    """Crawl all chapters of a kanda.
+def crawl_kanda(kanda: dict, output_dir: Path) -> bool:
+    """Crawl a kanda and save as a single file.
 
     Returns:
-        Number of chapters successfully saved
+        True if successful
     """
-    output_folder = output_dir / kanda['folder']
-    output_folder.mkdir(parents=True, exist_ok=True)
-
     print(f"\n{'='*60}")
     print(f"Crawling {kanda['name']} ({kanda['telugu']})")
     print(f"{'='*60}")
@@ -273,62 +257,56 @@ def crawl_kanda(kanda: dict, output_dir: Path) -> int:
     html = fetch_page(url)
     if not html:
         print(f"  ERROR: Failed to fetch kanda page")
-        return 0
+        return False
 
-    # Parse chapters
-    chapters = parse_kanda_page(html)
+    # Parse headings and verses
+    parsed = parse_kanda_page(html)
 
-    if not chapters:
-        print(f"  WARNING: No chapters found")
-        return 0
+    heading_count = sum(1 for t, _ in parsed if t == "heading")
+    verse_count = sum(1 for t, _ in parsed if t == "verses")
+    print(f"  Found {heading_count} chapter headings, {verse_count} verse blocks")
 
-    # Save each chapter
-    success_count = 0
+    if not parsed:
+        print(f"  WARNING: No content found")
+        return False
 
-    for i, (title, content) in enumerate(chapters, 1):
-        # Format output
-        output_text = format_output(kanda['telugu'], i, title, content)
+    # Build output
+    output_text = build_output(parsed)
 
-        # Create filename
-        safe_title = sanitize_filename(title)
-        filename = f"{i:03d}_{safe_title}.txt" if safe_title else f"{i:03d}.txt"
-        filepath = output_folder / filename
+    # Save to file
+    filepath = output_dir / kanda['filename']
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(output_text)
 
-        # Save to file
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(output_text)
-
-        success_count += 1
-        print(f"  Chapter {i:03d}: {title[:40]}...")
-
-    return success_count
+    line_count = output_text.count('\n')
+    print(f"  Saved: {filepath} ({line_count} lines)")
+    return True
 
 
 def main():
     """Main function to crawl all kandas."""
-    print("="*60)
+    print("=" * 60)
     print("Dwipada Bhagavatam Crawler")
-    print("="*60)
+    print("=" * 60)
     print(f"Output directory: {OUTPUT_DIR}")
     print(f"Total kandas: {len(KANDAS)}")
-    print("="*60)
+    print("=" * 60)
 
     # Create output directory
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Track statistics
-    total_success = 0
+    success_count = 0
 
     for kanda in KANDAS:
-        success = crawl_kanda(kanda, OUTPUT_DIR)
-        total_success += success
-        print(f"\n{kanda['name']}: {success} chapters saved")
+        if crawl_kanda(kanda, OUTPUT_DIR):
+            success_count += 1
 
     # Final summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("CRAWL COMPLETE")
-    print("="*60)
-    print(f"Total chapters saved: {total_success}")
+    print("=" * 60)
+    print(f"Kandas saved: {success_count}/{len(KANDAS)}")
     print(f"Output directory: {OUTPUT_DIR}")
 
 
